@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum StablecoinError {
-    #[msg("Unauthorized - caller is not the owner")]
+    #[msg("Unauthorized - caller is not the master authority")]
     Unauthorized,
     #[msg("Unauthorized - caller is not the minter")]
     UnauthorizedMinter,
@@ -24,6 +24,16 @@ pub enum StablecoinError {
     MintPaused,
     #[msg("Overflow in arithmetic")]
     Overflow,
-    #[msg("Not Compliant Token")]
+    #[msg("Not Compliant Token (SSS-2 required)")]
     NotCompliantMode,
+    #[msg("Transfers are paused")]
+    TransfersPaused,
+    #[msg("Sender is blacklisted")]
+    SenderBlacklisted,
+    #[msg("Receiver is blacklisted")]
+    ReceiverBlacklisted,
+    #[msg("Invalid account")]
+    InvalidAccount,
+    #[msg("Cannot blacklist zero address")]
+    BlacklistZeroAddress,
 }

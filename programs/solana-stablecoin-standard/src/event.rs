@@ -3,22 +3,14 @@ use anchor_lang::prelude::*;
 #[event]
 pub struct ConfigInitialized {
     pub config: Pubkey,
-    pub owner: Pubkey,
+    pub authority: Pubkey,
     pub mint: Pubkey,
-    pub is_compliant: bool,
+    pub preset: u8,
 }
 
 #[event]
-pub struct RolesUpdated {
-    pub config: Pubkey,
-    pub old_minter: Pubkey,
-    pub new_minter: Pubkey,
-    pub old_freezer: Pubkey,
-    pub new_freezer: Pubkey,
-    pub old_pauser: Pubkey,
-    pub new_pauser: Pubkey,
-    pub old_blacklister: Pubkey,
-    pub new_blacklister: Pubkey,
+pub struct PausedChanged {
+    pub paused: bool,
 }
 
 #[event]
@@ -56,11 +48,6 @@ pub struct AccountThawed {
     pub account: Pubkey,
     pub mint: Pubkey,
     pub freezer: Pubkey,
-}
-
-#[event]
-pub struct BlacklistInitialized {
-    pub config: Pubkey,
 }
 
 #[event]

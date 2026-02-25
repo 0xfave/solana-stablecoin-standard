@@ -3,21 +3,23 @@ use anchor_lang::prelude::*;
 #[account]
 #[derive(InitSpace)]
 pub struct StablecoinConfig {
-    pub owner: Pubkey,
+    pub master_authority: Pubkey,
     pub mint: Pubkey,
-    pub minter: Pubkey,                        // can mint
-    pub freezer: Pubkey,                       // can freeze accounts
-    pub pauser: Pubkey,                        // can pause minting
-    pub blacklister: Pubkey,                   // SSS-2
-    pub transfer_hook_program: Option<Pubkey>, // SSS-2
-    pub permanent_delegate: Option<Pubkey>,    // SSS-2
+    pub preset: u8,
+    pub paused: bool,
+    pub supply_cap: Option<u64>,
+    pub transfer_hook_program: Option<Pubkey>,
+    pub decimals: u8,
     pub bump: u8,
+    pub pending_master_authority: Option<Pubkey>,
 }
 
 #[account]
 #[derive(InitSpace)]
-pub struct Blacklist {
-    #[max_len(100)]
-    pub entries: Vec<Pubkey>,
+pub struct BlacklistEntry {
+    pub blacklister: Pubkey,
+    #[max_len(200)]
+    pub reason: String,
+    pub timestamp: i64,
     pub bump: u8,
 }

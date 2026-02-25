@@ -7,6 +7,7 @@ skip-lint = false
 
 [programs.localnet]
 solana_stablecoin_standard = "3cJyL8kQwwKHoUPs3MCPivExBdnFt1y5XipxChW2uKXS"
+sss_compliance_hook = "bV4wzw656CmBsyL3ZYKJe3SaE6QiqY1nc8SnuFgrqSG"
 
 [registry]
 url = "https://api.apr.dev"
