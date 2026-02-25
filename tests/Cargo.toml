@@ -1,0 +1,10 @@
+[package]
+name = "tests"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[dependencies]
+anchor-client = "0.31.1"
+solana-stablecoin-standard = { version = "0.1.0", path = "../programs/solana-stablecoin-standard" }
+litesvm = "0.9.1"
