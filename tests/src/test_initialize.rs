@@ -1,28 +1,36 @@
-use std::str::FromStr;
-
-use anchor_client::{
-    solana_sdk::{
-        commitment_config::CommitmentConfig, pubkey::Pubkey, signature::read_keypair_file,
-    },
-    Client, Cluster,
-};
+use crate::test_util::*;
+use anchor_lang::prelude::Pubkey;
+use anchor_lang::AccountDeserialize;
+use solana_signer::Signer;
+use solana_stablecoin_standard::{instruction as sss_instruction};
 
 #[test]
 fn test_initialize() {
-    let program_id = "3cJyL8kQwwKHoUPs3MCPivExBdnFt1y5XipxChW2uKXS";
-    let anchor_wallet = std::env::var("ANCHOR_WALLET").unwrap();
-    let payer = read_keypair_file(&anchor_wallet).unwrap();
+    let mut setup = setup();
+    let svm = &mut setup.svm;
+    let payer = &setup.payer;
+    let mint = &setup.mint;
+    let mint_authority = &setup.mint_authority;
 
-    let client = Client::new_with_options(Cluster::Localnet, &payer, CommitmentConfig::confirmed());
-    let program_id = Pubkey::from_str(program_id).unwrap();
-    let program = client.program(program_id).unwrap();
+    create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
 
-    let tx = program
-        .request()
-        .accounts(solana_stablecoin_standard::accounts::Initialize {})
-        .args(solana_stablecoin_standard::instruction::Initialize {})
-        .send()
-        .expect("");
+    let config = initialize(
+        svm,
+        payer,
+        mint_authority,
+        &mint.pubkey(),
+        1,
+        Some(1_000_000_000_000),
+        6,
+    );
 
-    println!("Your transaction signature {}", tx);
+    let config_account = svm.get_account(&config).unwrap();
+    let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref()).unwrap();
+
+    assert_eq!(config_data.mint, mint.pubkey());
+    assert_eq!(config_data.master_authority, mint_authority.pubkey());
+    assert_eq!(config_data.preset, 1);
+    assert_eq!(config_data.paused, false);
+    assert_eq!(config_data.supply_cap, Some(1_000_000_000_000));
+    assert_eq!(config_data.decimals, 6);
 }

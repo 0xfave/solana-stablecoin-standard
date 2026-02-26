@@ -1,0 +1,151 @@
+use solana_stablecoin_standard::ID as PROGRAM_ID;
+use sss_compliance_hook::ID as SSS_PROGRAM_ID;
+
+use anchor_lang::{
+    error::Error,
+    prelude::{msg, AccountMeta},
+    solana_program::{
+        hash::Hash, native_token::LAMPORTS_PER_SOL, program_pack::Pack, pubkey::Pubkey,
+        system_instruction,
+    },
+    system_program::ID as SYSTEM_PROGRAM_ID,
+    AccountDeserialize, InstructionData, Key, ToAccountMetas,
+};
+use anchor_spl::{
+    associated_token::{self, spl_associated_token_account},
+    token_2022::spl_token_2022,
+};
+use litesvm::LiteSVM;
+use solana_instruction::Instruction;
+use solana_keypair::Keypair;
+use solana_signer::Signer;
+use solana_transaction::Transaction;
+use spl_token_2022::ID as TOKEN_2022_ID;
+
+pub struct ReusableData {
+    pub svm: LiteSVM,
+    pub payer: Keypair,
+    pub mint: Keypair,
+    pub mint_authority: Keypair,
+    pub token_program: Pubkey,
+    pub system_program: Pubkey,
+}
+
+pub fn setup() -> ReusableData {
+    let mut svm = LiteSVM::new();
+    let payer = Keypair::new();
+    let mint = Keypair::new();
+    let mint_authority = Keypair::new();
+
+    svm.airdrop(&payer.pubkey(), 10 * LAMPORTS_PER_SOL)
+        .expect("Failed to airdrop SOL to payer");
+
+    let program_bytes = include_bytes!("../../target/deploy/solana_stablecoin_standard.so");
+    svm.add_program(PROGRAM_ID, program_bytes);
+
+    let sss_compliance_hook_bytes = include_bytes!("../../target/deploy/sss_compliance_hook.so");
+    svm.add_program(SSS_PROGRAM_ID, sss_compliance_hook_bytes);
+
+    let token_program = TOKEN_2022_ID;
+    let system_program = SYSTEM_PROGRAM_ID;
+
+    ReusableData {
+        svm,
+        payer,
+        mint,
+        mint_authority,
+        token_program,
+        system_program,
+    }
+}
+
+pub fn create_mint(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    mint: &Keypair,
+    mint_authority: &Pubkey,
+    decimals: u8,
+) {
+    let token_program = TOKEN_2022_ID;
+
+    let mint_space = 82;
+    let lamports = svm.minimum_balance_for_rent_exemption(mint_space);
+
+    let create_mint_ix = system_instruction::create_account(
+        &payer.pubkey(),
+        &mint.pubkey(),
+        lamports,
+        mint_space as u64,
+        &token_program,
+    );
+
+    let initialize_mint_ix = spl_token_2022::instruction::initialize_mint(
+        &token_program,
+        &mint.pubkey(),
+        mint_authority,
+        None,
+        decimals,
+    )
+    .unwrap();
+
+    let blockhash = svm.latest_blockhash();
+
+    let tx = Transaction::new_signed_with_payer(
+        &[create_mint_ix, initialize_mint_ix],
+        Some(&payer.pubkey()),
+        &[payer, mint],
+        blockhash,
+    );
+
+    svm.send_transaction(tx).expect("Failed to create mint");
+}
+
+pub fn initialize(
+    svm: &mut LiteSVM,
+    payer: &Keypair,
+    authority: &Keypair,
+    mint: &Pubkey,
+    preset: u8,
+    supply_cap: Option<u64>,
+    decimals: u8,
+) -> Pubkey {
+    let (config_pda, _) =
+        Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+    let token_program = TOKEN_2022_ID;
+
+    let accounts = vec![
+        AccountMeta::new(config_pda, false),
+        AccountMeta::new_readonly(*mint, false),
+        AccountMeta::new(authority.pubkey(), true),
+        AccountMeta::new_readonly(token_program, false),
+        AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+    ];
+
+    let mut data = vec![0u8; 8];
+    data.push(preset);
+    if let Some(cap) = supply_cap {
+        data.push(1);
+        data.extend_from_slice(&cap.to_le_bytes());
+    } else {
+        data.push(0);
+    }
+    data.push(decimals);
+
+    let blockhash = svm.latest_blockhash();
+
+    let tx = Transaction::new_signed_with_payer(
+        &[Instruction {
+            program_id: PROGRAM_ID,
+            accounts,
+            data,
+        }],
+        Some(&payer.pubkey()),
+        &[payer, authority],
+        blockhash,
+    );
+
+    svm.send_transaction(tx).expect("Failed to initialize");
+
+    config_pda
+}

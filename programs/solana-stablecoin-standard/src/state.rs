@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[account]
-#[derive(InitSpace)]
+#[derive(Debug, InitSpace)]
 pub struct StablecoinConfig {
     pub master_authority: Pubkey,
     pub mint: Pubkey,
@@ -15,7 +15,7 @@ pub struct StablecoinConfig {
 }
 
 #[account]
-#[derive(InitSpace)]
+#[derive(Debug, InitSpace)]
 pub struct BlacklistEntry {
     pub blacklister: Pubkey,
     #[max_len(200)]
