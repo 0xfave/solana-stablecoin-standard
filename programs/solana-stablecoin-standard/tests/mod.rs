@@ -288,4 +288,258 @@ mod tests {
         assert_eq!(config_data.supply_cap, Some(1_000_000_000_000));
         assert_eq!(config_data.decimals, 6);
     }
+
+    #[test]
+    fn test_reinitialize_same_pda_fails() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // First initialization
+        let _config = initialize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            0,
+            Some(1_000_000_000_000),
+            6,
+        );
+
+        // Try to re-initialize with same PDA - should fail
+        // Use send_transaction directly to catch the error
+        let mint_pubkey = mint.pubkey();
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"stablecoin", mint_pubkey.as_ref()], &PROGRAM_ID);
+
+        let token_program = TOKEN_2022_ID;
+
+        #[derive(AnchorSerialize)]
+        struct InitializeArgs {
+            preset: u8,
+            supply_cap: Option<u64>,
+            decimals: u8,
+        }
+
+        let args = InitializeArgs {
+            preset: 0,
+            supply_cap: Some(1_000_000_000_000),
+            decimals: 6,
+        };
+
+        let mut data = vec![0xaf, 0xaf, 0x6d, 0x1f, 0x0d, 0x98, 0x9b, 0xed];
+        let args_bytes = args.try_to_vec().unwrap();
+        data.extend_from_slice(&args_bytes);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(mint_pubkey, false),
+            AccountMeta::new(mint_authority.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction {
+                program_id: PROGRAM_ID,
+                accounts,
+                data,
+            }],
+            Some(&payer.pubkey()),
+            &[payer, mint_authority],
+            blockhash,
+        );
+
+        let result = svm.send_transaction(tx);
+        assert!(result.is_err(), "Re-initialization should fail");
+    }
+
+    #[test]
+    fn test_initialize_with_non_signing_owner_fails() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        let mint_pubkey = mint.pubkey();
+
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"stablecoin", mint_pubkey.as_ref()], &PROGRAM_ID);
+
+        let token_program = TOKEN_2022_ID;
+
+        #[derive(AnchorSerialize)]
+        struct InitializeArgs {
+            preset: u8,
+            supply_cap: Option<u64>,
+            decimals: u8,
+        }
+
+        let args = InitializeArgs {
+            preset: 0,
+            supply_cap: Some(1_000_000_000_000),
+            decimals: 6,
+        };
+
+        let mut data = vec![0xaf, 0xaf, 0x6d, 0x1f, 0x0d, 0x98, 0x9b, 0xed];
+        let args_bytes = args.try_to_vec().unwrap();
+        data.extend_from_slice(&args_bytes);
+
+        // Authority is NOT a signer - this should fail
+        let non_signer_authority = Keypair::new();
+        svm.airdrop(&non_signer_authority.pubkey(), LAMPORTS_PER_SOL)
+            .unwrap();
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(mint_pubkey, false),
+            AccountMeta::new_readonly(non_signer_authority.pubkey(), false), // Not a signer!
+            AccountMeta::new_readonly(token_program, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction {
+                program_id: PROGRAM_ID,
+                accounts,
+                data,
+            }],
+            Some(&payer.pubkey()),
+            &[payer], // Only payer signs, not authority
+            blockhash,
+        );
+
+        let result = svm.send_transaction(tx);
+        assert!(
+            result.is_err(),
+            "Initialization with non-signing owner should fail"
+        );
+    }
+
+    fn update_paused(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        paused: bool,
+    ) -> Result<(), String> {
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        #[derive(AnchorSerialize)]
+        struct UpdatePausedArgs {
+            paused: bool,
+        }
+
+        let args = UpdatePausedArgs { paused };
+
+        let mut data = vec![0x4e, 0xec, 0x55, 0x68, 0xa9, 0xe7, 0xcd, 0x59];
+        let args_bytes = args.try_to_vec().unwrap();
+        data.extend_from_slice(&args_bytes);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(authority.pubkey(), true),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction {
+                program_id: PROGRAM_ID,
+                accounts,
+                data,
+            }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    #[test]
+    fn test_update_paused_succeeds_by_master_authority() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 0 (SSS-1)
+        let _config = initialize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            0,
+            Some(1_000_000_000_000),
+            6,
+        );
+
+        // Update paused to true - should succeed
+        let result = update_paused(svm, payer, mint_authority, &mint.pubkey(), true);
+        assert!(
+            result.is_ok(),
+            "update_paused should succeed when called by master_authority"
+        );
+
+        // Verify the config is paused
+        let (config_pda, _) =
+            Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
+        let config_account = svm.get_account(&config_pda).unwrap();
+        let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(
+            &mut config_account.data.as_ref(),
+        )
+        .unwrap();
+        assert_eq!(config_data.paused, true);
+    }
+
+    #[test]
+    fn test_update_paused_fails_by_non_owner() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            0,
+            Some(1_000_000_000_000),
+            6,
+        );
+
+        // Try to update paused with a non-owner - should fail
+        let non_owner = Keypair::new();
+        svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = update_paused(svm, payer, &non_owner, &mint.pubkey(), true);
+        assert!(
+            result.is_err(),
+            "update_paused should fail when called by non-owner"
+        );
+    }
 }
