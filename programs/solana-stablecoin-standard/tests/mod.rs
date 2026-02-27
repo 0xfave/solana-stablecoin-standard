@@ -263,6 +263,28 @@ mod tests {
         ata
     }
 
+    fn create_token_account_for_owner(svm: &mut LiteSVM, payer: &Keypair, owner: &Keypair, mint: &Pubkey) -> Pubkey {
+        let ata =
+            associated_token::get_associated_token_address_with_program_id(&owner.pubkey(), mint, &spl_token_2022::ID);
+
+        let create_ata_ix = spl_associated_token_account::instruction::create_associated_token_account(
+            &payer.pubkey(),
+            &owner.pubkey(),
+            mint,
+            &spl_token_2022::ID,
+        );
+
+        let tx = Transaction::new_signed_with_payer(
+            &[create_ata_ix],
+            Some(&payer.pubkey()),
+            &[payer],
+            svm.latest_blockhash(),
+        );
+        svm.send_transaction(tx).unwrap();
+
+        ata
+    }
+
     fn mint_tokens(
         svm: &mut LiteSVM,
         payer: &Keypair,
@@ -289,6 +311,82 @@ mod tests {
         let tx =
             Transaction::new_signed_with_payer(&[mint_ix], Some(&payer.pubkey()), &[payer, mint_authority], blockhash);
         svm.send_transaction(tx).expect("Failed to mint tokens");
+    }
+
+    fn program_mint(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        minter: &Keypair,
+        mint: &Pubkey,
+        destination: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let token_program = TOKEN_2022_ID;
+
+        let discriminator = compute_instruction_discriminator("mint");
+        let args = amount.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &args);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(*mint, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new(minter.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, minter],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn program_burn(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        burner: &Keypair,
+        mint: &Pubkey,
+        from: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let token_program = TOKEN_2022_ID;
+
+        let discriminator = compute_instruction_discriminator("burn");
+        let args = amount.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &args);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(*mint, false),
+            AccountMeta::new(*from, false),
+            AccountMeta::new(burner.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, burner],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
     }
 
     fn freeze_account(
@@ -925,5 +1023,172 @@ mod tests {
         let new_blacklister = Keypair::new();
         let result = update_blacklister(svm, payer, mint_authority, &mint.pubkey(), &new_blacklister.pubkey());
         assert!(result.is_err(), "update_blacklister should fail in SSS-1");
+    }
+
+    #[test]
+    fn test_mint_succeeds_when_caller_is_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token account
+        let user = Keypair::new();
+        svm.airdrop(&user.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // Mint tokens using program instruction (minter is mint_authority)
+        let result = program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000);
+        assert!(result.is_ok(), "mint should succeed when called by minter");
+    }
+
+    #[test]
+    fn test_mint_fails_if_caller_is_not_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token account
+        let user = Keypair::new();
+        svm.airdrop(&user.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // Try to mint with non-minter - should fail
+        let non_minter = Keypair::new();
+        svm.airdrop(&non_minter.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = program_mint(svm, payer, &non_minter, &mint.pubkey(), &token_account, 1000);
+        assert!(result.is_err(), "mint should fail when called by non-minter");
+    }
+
+    #[test]
+    fn test_mint_fails_when_paused() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Pause the mint
+        update_paused(svm, payer, mint_authority, &mint.pubkey(), true).unwrap();
+
+        // Create token account
+        let user = Keypair::new();
+        svm.airdrop(&user.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // Try to mint when paused - should fail
+        let result = program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000);
+        assert!(result.is_err(), "mint should fail when paused");
+    }
+
+    #[test]
+    fn test_mint_exceeds_supply_cap_fails() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with small supply cap
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(100), 6);
+
+        // Create token account
+        let user = Keypair::new();
+        svm.airdrop(&user.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // Try to mint more than supply cap - should fail
+        let result = program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 200);
+        assert!(result.is_err(), "mint should fail when exceeding supply cap");
+    }
+
+    #[test]
+    fn test_burn_succeeds_when_caller_is_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token account for mint_authority (who is the minter)
+        let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+
+        // Burn tokens using program instruction (mint_authority is minter and owns the ATA)
+        let result = program_burn(svm, payer, mint_authority, &mint.pubkey(), &token_account, 500);
+        assert!(result.is_ok(), "burn should succeed when called by minter");
+    }
+
+    #[test]
+    fn test_burn_fails_if_caller_is_not_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token account for mint_authority and mint tokens
+        let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+
+        // Try to burn with non-minter - should fail
+        let non_minter = Keypair::new();
+        svm.airdrop(&non_minter.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = program_burn(svm, payer, &non_minter, &mint.pubkey(), &token_account, 500);
+        assert!(result.is_err(), "burn should fail when called by non-minter");
+    }
+
+    #[test]
+    fn test_burn_more_than_balance() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token account for mint_authority and mint only 500 tokens
+        let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 500);
+
+        // Try to burn more than balance - should fail
+        let result = program_burn(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000);
+        assert!(result.is_err(), "burn should fail when burning more than balance");
     }
 }
