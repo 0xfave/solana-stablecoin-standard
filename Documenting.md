@@ -12,10 +12,11 @@ This document explains the key systems and design decisions in the Solana Stable
 4. [PDA-Based Account Derivation](#4-pda-based-account-derivation)
 5. [Preset System (Compliant vs Non-Compliant)](#5-preset-system-compliant-vs-non-compliant)
 6. [Blacklist System](#6-blacklist-system)
-7. [Built-in Transfer with Compliance Checks](#7-built-in-transfer-with-compliance-checks)
-8. [CPI for Token Operations](#8-cpi-for-token-operations)
-9. [Event Emission](#9-event-emission)
-10. [Master Authority Pattern](#10-master-authority-pattern)
+7. [Seize Functionality](#7-seize-functionality)
+8. [Built-in Transfer with Compliance Checks](#8-built-in-transfer-with-compliance-checks)
+9. [CPI for Token Operations](#9-cpi-for-token-operations)
+10. [Event Emission](#10-event-emission)
+11. [Master Authority Pattern](#11-master-authority-pattern)
 
 ---
 
@@ -113,12 +114,12 @@ This document explains the key systems and design decisions in the Solana Stable
 **What it is:** A `preset` field in the config that determines which features are available:
 
 - `preset = 0`: Non-compliant mode - basic stablecoin operations only
-- `preset = 1`: Compliant mode - enables blacklist, freeze, transfer hook, and extra account meta list
+- `preset = 1`: Compliant mode - enables blacklist, freeze, seize (via permanent delegate), transfer hook, and extra account meta list
 
 **Why it's used:**
 
 - **Regulatory Flexibility:** Different jurisdictions have different requirements. Non-compliant mode works for unrestricted tokens, compliant mode enables KYC/AML features
-- **Feature Gating:** Advanced features like blacklist and freeze are only available in compliant mode
+- **Feature Gating:** Advanced features like blacklist, freeze, and seize are only available in compliant mode
 - **User Choice:** Deployers choose the preset that fits their use case
 - **Minimal Footprint:** Non-compliant mode is simpler and cheaper to operate
 
@@ -174,7 +175,46 @@ if sender_blacklist_key == expected_sender_blacklist
 
 ---
 
-## 7. Built-in Transfer with Compliance Checks
+## 7. Seize Functionality (SSS-2 Only)
+
+**What it is:** Allows the minter (via permanent delegate) to forcibly transfer tokens from a blacklisted account to a designated destination. Requires Token-2022's Permanent Delegate extension.
+
+**Why it's used:**
+
+- **Asset Recovery:** Enables recovery of funds from sanctioned or fraudulent accounts as required by law
+- **Treasury Management:** Seized funds can go to a controlled treasury for later disposal
+- **Permanent Delegate:** Uses Token-2022's Permanent Delegate extension - irrevocable authority that can transfer from any account
+
+**Implementation:**
+
+The seize instruction:
+1. Verifies preset == 1 (compliant mode required)
+2. Verifies caller is the minter (authorized seizer)
+3. Validates blacklist account exists for source account
+4. Uses raw CPI to Token-2022's `transfer_checked` with the minter as authority (permanent delegate)
+
+```rust
+let transfer_ix = spl_token_2022::instruction::transfer_checked(
+    &ctx.accounts.token_program.key(),
+    &ctx.accounts.source.key(),
+    &mint_key,
+    &ctx.accounts.destination.key(),
+    &ctx.accounts.seizer.key(),  // permanent delegate
+    &[],
+    amount,
+    decimals,
+)?;
+```
+
+**Benefits over alternatives:**
+
+- vs Burn Only: Seize keeps tokens in circulation (can be treasury-managed), burn removes from supply
+- vs No Recovery: Provides legal/regulatory path to recover funds
+- vs Manual Process: Programmatic - no need for manual token movement by authority
+
+---
+
+## 8. Built-in Transfer with Compliance Checks
 
 **What it is:** The stablecoin program includes a native `transfer` instruction that performs compliance checks (pause + blacklist) before executing the transfer via CPI to Token-2022.
 

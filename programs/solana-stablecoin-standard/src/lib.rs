@@ -167,20 +167,33 @@ pub mod solana_stablecoin_standard {
             return Err(StablecoinError::NotBlacklisted.into());
         }
         
-        anchor_spl::token_interface::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token_interface::Transfer {
-                    from: ctx.accounts.source.to_account_info(),
-                    to: ctx.accounts.destination.to_account_info(),
-                    authority: ctx.accounts.seizer.to_account_info(),
-                },
-            ),
+        let mint_key = ctx.accounts.mint.key();
+        let decimals = ctx.accounts.mint.decimals;
+        
+        let transfer_ix = spl_token_2022::instruction::transfer_checked(
+            &ctx.accounts.token_program.key(),
+            &ctx.accounts.source.key(),
+            &mint_key,
+            &ctx.accounts.destination.key(),
+            &ctx.accounts.seizer.key(),
+            &[],
             amount,
+            decimals,
+        )?;
+        
+        invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.source.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.destination.to_account_info(),
+                ctx.accounts.seizer.to_account_info(),
+                ctx.accounts.token_program.to_account_info(),
+            ],
         )?;
         
         emit!(TokensSeized {
-            mint: ctx.accounts.mint.key(),
+            mint: mint_key,
             from: ctx.accounts.source.key(),
             to: ctx.accounts.destination.key(),
             amount,
@@ -438,7 +451,6 @@ pub struct Burn<'info> {
 #[derive(Accounts)]
 pub struct Seize<'info> {
     pub config: Account<'info, StablecoinConfig>,
-    #[account(mut)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub source: InterfaceAccount<'info, TokenAccount>,

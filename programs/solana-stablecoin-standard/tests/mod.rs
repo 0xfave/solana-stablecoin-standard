@@ -1398,7 +1398,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Permanent delegate requires real cluster - not supported in LiteSVM"]
     fn test_seize_succeeds_when_caller_is_minter() {
         let mut setup = setup();
         let svm = &mut setup.svm;
