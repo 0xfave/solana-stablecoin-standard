@@ -21,6 +21,34 @@ pub struct TransferHookUpdated {
 }
 
 #[event]
+pub struct MinterUpdated {
+    pub config: Pubkey,
+    pub old_minter: Pubkey,
+    pub new_minter: Pubkey,
+}
+
+#[event]
+pub struct FreezerUpdated {
+    pub config: Pubkey,
+    pub old_freezer: Pubkey,
+    pub new_freezer: Pubkey,
+}
+
+#[event]
+pub struct PauserUpdated {
+    pub config: Pubkey,
+    pub old_pauser: Pubkey,
+    pub new_pauser: Pubkey,
+}
+
+#[event]
+pub struct BlacklisterUpdated {
+    pub config: Pubkey,
+    pub old_blacklister: Pubkey,
+    pub new_blacklister: Pubkey,
+}
+
+#[event]
 pub struct TokensMinted {
     pub mint: Pubkey,
     pub to: Pubkey,
