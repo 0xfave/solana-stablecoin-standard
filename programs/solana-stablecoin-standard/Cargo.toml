@@ -19,7 +19,7 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
 anchor-lang = "0.31.1"
-anchor-spl = { version = "0.31.1", features = ["token_2022", "associated_token", "metadata"] }
+anchor-spl = { version = "0.31.1" }
 
 [dev-dependencies]
 litesvm = "0.6.1"

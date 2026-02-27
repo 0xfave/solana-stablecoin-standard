@@ -22,13 +22,8 @@ pub enum ComplianceError {
 pub mod sss_compliance_hook {
     use super::*;
 
-    pub fn initialize_extra_account_meta_list(
-        ctx: Context<InitializeExtraAccountMetaList>,
-    ) -> Result<()> {
-        msg!(
-            "ExtraAccountMetaList initialized for mint: {}",
-            ctx.accounts.mint.key()
-        );
+    pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
+        msg!("ExtraAccountMetaList initialized for mint: {}", ctx.accounts.mint.key());
         Ok(())
     }
 
@@ -59,11 +54,7 @@ pub mod sss_compliance_hook {
         }
 
         let dest_blacklist_key = Pubkey::try_find_program_address(
-            &[
-                blacklist_seed,
-                config_key.as_ref(),
-                destination_owner.as_ref(),
-            ],
+            &[blacklist_seed, config_key.as_ref(), destination_owner.as_ref()],
             &program_id,
         )
         .map(|(key, _)| key);
@@ -76,12 +67,7 @@ pub mod sss_compliance_hook {
             }
         }
 
-        msg!(
-            "Transfer hook passed for {} tokens from {} to {}",
-            amount,
-            source_owner,
-            destination_owner
-        );
+        msg!("Transfer hook passed for {} tokens from {} to {}", amount, source_owner, destination_owner);
 
         Ok(())
     }

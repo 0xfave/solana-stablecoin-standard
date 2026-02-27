@@ -16,12 +16,7 @@ use crate::event::*;
 pub mod solana_stablecoin_standard {
     use super::*;
 
-    pub fn initialize(
-        ctx: Context<Initialize>,
-        preset: u8,
-        supply_cap: Option<u64>,
-        decimals: u8,
-    ) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, preset: u8, supply_cap: Option<u64>, decimals: u8) -> Result<()> {
         let config = &mut ctx.accounts.config;
         let authority_key = ctx.accounts.authority.key();
         let mint_key = ctx.accounts.mint.key();
@@ -47,50 +42,28 @@ pub mod solana_stablecoin_standard {
 
     pub fn update_paused(ctx: Context<UpdatePaused>, paused: bool) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
         config.paused = paused;
         emit!(PausedChanged { paused });
         Ok(())
     }
 
-    pub fn update_transfer_hook(
-        ctx: Context<UpdateTransferHook>,
-        new_hook_program: Option<Pubkey>,
-    ) -> Result<()> {
+    pub fn update_transfer_hook(ctx: Context<UpdateTransferHook>, new_hook_program: Option<Pubkey>) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
         let old_hook = config.transfer_hook_program;
         config.transfer_hook_program = new_hook_program;
-        emit!(TransferHookUpdated {
-            config: ctx.accounts.config.key(),
-            old_hook_program: old_hook,
-            new_hook_program,
-        });
+        emit!(TransferHookUpdated { config: ctx.accounts.config.key(), old_hook_program: old_hook, new_hook_program });
         Ok(())
     }
 
     pub fn mint(ctx: Context<MintTokens>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.minter.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedMinter
-        );
+        require_keys_eq!(ctx.accounts.minter.key(), config.master_authority, StablecoinError::UnauthorizedMinter);
         require!(!config.paused, StablecoinError::MintPaused);
         if let Some(cap) = config.supply_cap {
-            require!(
-                ctx.accounts.mint.supply + amount <= cap,
-                StablecoinError::Overflow
-            );
+            require!(ctx.accounts.mint.supply + amount <= cap, StablecoinError::Overflow);
         }
         anchor_spl::token_interface::mint_to(
             CpiContext::new(
@@ -114,11 +87,7 @@ pub mod solana_stablecoin_standard {
 
     pub fn burn(ctx: Context<Burn>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.burner.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedMinter
-        );
+        require_keys_eq!(ctx.accounts.burner.key(), config.master_authority, StablecoinError::UnauthorizedMinter);
         anchor_spl::token_interface::burn(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -141,11 +110,7 @@ pub mod solana_stablecoin_standard {
 
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.freezer.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedFreezer
-        );
+        require_keys_eq!(ctx.accounts.freezer.key(), config.master_authority, StablecoinError::UnauthorizedFreezer);
         anchor_spl::token_interface::freeze_account(CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token_interface::FreezeAccount {
@@ -164,11 +129,7 @@ pub mod solana_stablecoin_standard {
 
     pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.freezer.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedFreezer
-        );
+        require_keys_eq!(ctx.accounts.freezer.key(), config.master_authority, StablecoinError::UnauthorizedFreezer);
         anchor_spl::token_interface::thaw_account(CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token_interface::ThawAccount {
@@ -193,10 +154,7 @@ pub mod solana_stablecoin_standard {
             config.master_authority,
             StablecoinError::UnauthorizedBlacklister
         );
-        require!(
-            ctx.accounts.target.key() != Pubkey::default(),
-            StablecoinError::BlacklistZeroAddress
-        );
+        require!(ctx.accounts.target.key() != Pubkey::default(), StablecoinError::BlacklistZeroAddress);
         let entry = &mut ctx.accounts.blacklist_entry;
         entry.blacklister = ctx.accounts.blacklister.key();
         entry.reason = reason;
@@ -214,19 +172,10 @@ pub mod solana_stablecoin_standard {
     pub fn blacklist_remove(ctx: Context<BlacklistRemove>) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
-        require!(
-            ctx.accounts.blacklist_entry.to_account_info().data_len() > 0,
-            StablecoinError::NotBlacklisted
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
+        require!(ctx.accounts.blacklist_entry.to_account_info().data_len() > 0, StablecoinError::NotBlacklisted);
         let target = ctx.accounts.blacklist_entry.key();
-        ctx.accounts
-            .blacklist_entry
-            .close(ctx.accounts.destination.to_account_info())?;
+        ctx.accounts.blacklist_entry.close(ctx.accounts.destination.to_account_info())?;
         emit!(RemovedFromBlacklist {
             config: ctx.accounts.config.key(),
             target,
@@ -238,15 +187,8 @@ pub mod solana_stablecoin_standard {
     pub fn seize(ctx: Context<Seize>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(
-            ctx.accounts.seizer.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedSeizer
-        );
-        require!(
-            ctx.accounts.from.to_account_info().data_len() > 0,
-            StablecoinError::InvalidAccount
-        );
+        require_keys_eq!(ctx.accounts.seizer.key(), config.master_authority, StablecoinError::UnauthorizedSeizer);
+        require!(ctx.accounts.from.to_account_info().data_len() > 0, StablecoinError::InvalidAccount);
         anchor_spl::token_interface::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -267,20 +209,11 @@ pub mod solana_stablecoin_standard {
         Ok(())
     }
 
-    pub fn initialize_extra_account_meta_list(
-        ctx: Context<InitializeExtraAccountMetaList>,
-    ) -> Result<()> {
+    pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
-        msg!(
-            "ExtraAccountMetaList initialized for mint: {}",
-            ctx.accounts.mint.key()
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
+        msg!("ExtraAccountMetaList initialized for mint: {}", ctx.accounts.mint.key());
         Ok(())
     }
 }
