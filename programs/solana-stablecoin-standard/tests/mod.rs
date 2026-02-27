@@ -351,6 +351,76 @@ mod tests {
         }
     }
 
+    fn freeze_account(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        account: &Pubkey,
+    ) -> Result<(), String> {
+        let token_program = TOKEN_2022_ID;
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("freeze_account");
+        let data = serialize_with_discriminator(&discriminator, &[]);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*account, false),
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn thaw_account(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        account: &Pubkey,
+    ) -> Result<(), String> {
+        let token_program = TOKEN_2022_ID;
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("thaw_account");
+        let data = serialize_with_discriminator(&discriminator, &[]);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*account, false),
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
     fn program_burn(
         svm: &mut LiteSVM,
         payer: &Keypair,
@@ -380,42 +450,6 @@ mod tests {
             &[Instruction { program_id: PROGRAM_ID, accounts, data }],
             Some(&payer.pubkey()),
             &[payer, burner],
-            blockhash,
-        );
-
-        match svm.send_transaction(tx) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("{:?}", e)),
-        }
-    }
-
-    fn freeze_account(
-        svm: &mut LiteSVM,
-        payer: &Keypair,
-        authority: &Keypair,
-        mint: &Pubkey,
-        account: &Pubkey,
-    ) -> Result<(), String> {
-        let token_program = TOKEN_2022_ID;
-        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-
-        // freeze_account discriminator
-        let discriminator: [u8; 8] = [0xfd, 0x4b, 0x52, 0x85, 0xa7, 0xee, 0x2b, 0x82];
-        let data = serialize_with_discriminator(&discriminator, &[]);
-
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new_readonly(*mint, false),
-            AccountMeta::new(*account, false),
-            AccountMeta::new(authority.pubkey(), true),
-            AccountMeta::new_readonly(token_program, false),
-        ];
-
-        let blockhash = svm.latest_blockhash();
-        let tx = Transaction::new_signed_with_payer(
-            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
-            Some(&payer.pubkey()),
-            &[payer, authority],
             blockhash,
         );
 
@@ -715,6 +749,80 @@ mod tests {
         let accounts = vec![
             AccountMeta::new(config_pda, false),
             AccountMeta::new(authority.pubkey(), true),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn blacklist_add(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        blacklister: &Keypair,
+        mint: &Pubkey,
+        target: &Pubkey,
+        reason: String,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let (blacklist_entry, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("blacklist_add");
+        let reason_bytes = reason.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &reason_bytes);
+
+        let accounts = vec![
+            AccountMeta::new(blacklist_entry, false),
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(blacklister.pubkey(), true),
+            AccountMeta::new_readonly(*target, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, blacklister],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn blacklist_remove(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        target: &Pubkey,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let (blacklist_entry, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("blacklist_remove");
+        let data = serialize_with_discriminator(&discriminator, &[]);
+
+        let accounts = vec![
+            AccountMeta::new(blacklist_entry, false),
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(*target, false),
+            AccountMeta::new_readonly(payer.pubkey(), false),
         ];
 
         let blockhash = svm.latest_blockhash();
@@ -1190,5 +1298,173 @@ mod tests {
         // Try to burn more than balance - should fail
         let result = program_burn(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000);
         assert!(result.is_err(), "burn should fail when burning more than balance");
+    }
+
+    #[test]
+    fn test_thaw_account_succeeds_when_caller_is_freezer() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (compliant mode needed for freeze)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token account and mint tokens
+        let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+
+        // Freeze account first
+        freeze_account(svm, payer, mint_authority, &mint.pubkey(), &token_account).unwrap();
+
+        // Thaw account - should succeed
+        let result = thaw_account(svm, payer, mint_authority, &mint.pubkey(), &token_account);
+        assert!(result.is_ok(), "thaw_account should succeed when called by freezer");
+    }
+
+    #[test]
+    fn test_thaw_account_on_non_frozen_account() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (compliant mode needed for freeze)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token account and mint tokens
+        let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+
+        // Thaw account without freezing first - SPL Token fails on non-frozen account
+        let result = thaw_account(svm, payer, mint_authority, &mint.pubkey(), &token_account);
+        // Note: SPL Token returns error for thawing non-frozen account
+        assert!(result.is_err(), "thaw_account fails on non-frozen account in SPL Token");
+    }
+
+    #[test]
+    fn test_blacklist_add_succeeds_when_caller_is_blacklister() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2 / compliant mode)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Add to blacklist - should succeed (master_authority is blacklister by default)
+        let target = Keypair::new();
+        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        assert!(result.is_ok(), "blacklist_add should succeed when called by blacklister");
+    }
+
+    #[test]
+    fn test_blacklist_add_fails_if_already_blacklisted() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Add to blacklist first time
+        let target = Keypair::new();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Try to add again - should fail
+        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Another reason".to_string());
+        assert!(result.is_err(), "blacklist_add should fail if already blacklisted");
+    }
+
+    #[test]
+    fn test_blacklist_add_fails_in_sss1() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 0 (SSS-1)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Try to add to blacklist in SSS-1 - should fail
+        let target = Keypair::new();
+        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        assert!(result.is_err(), "blacklist_add should fail in SSS-1");
+    }
+
+    #[test]
+    fn test_blacklist_remove_succeeds_when_caller_is_blacklister() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Add to blacklist first
+        let target = Keypair::new();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Remove from blacklist - should succeed
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_ok(), "blacklist_remove should succeed when called by blacklister");
+    }
+
+    #[test]
+    fn test_blacklist_remove_fails_if_not_blacklisted() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Try to remove someone not blacklisted - should fail
+        let target = Keypair::new();
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_err(), "blacklist_remove should fail if not blacklisted");
+    }
+
+    #[test]
+    fn test_blacklist_remove_fails_in_sss1() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 0 (SSS-1)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Try to remove from blacklist in SSS-1 - should fail
+        let target = Keypair::new();
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_err(), "blacklist_remove should fail in SSS-1");
     }
 }

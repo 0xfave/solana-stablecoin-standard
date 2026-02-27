@@ -225,31 +225,6 @@ pub mod solana_stablecoin_standard {
         Ok(())
     }
 
-    pub fn seize(ctx: Context<Seize>, amount: u64) -> Result<()> {
-        let config = &ctx.accounts.config;
-        require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(ctx.accounts.seizer.key(), config.master_authority, StablecoinError::UnauthorizedSeizer);
-        require!(ctx.accounts.from.to_account_info().data_len() > 0, StablecoinError::InvalidAccount);
-        anchor_spl::token_interface::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token_interface::Transfer {
-                    from: ctx.accounts.from.to_account_info(),
-                    to: ctx.accounts.to.to_account_info(),
-                    authority: ctx.accounts.seizer.to_account_info(),
-                },
-            ),
-            amount,
-        )?;
-        emit!(TokensSeized {
-            from: ctx.accounts.from.key(),
-            to: ctx.accounts.to.key(),
-            amount,
-            seizer: ctx.accounts.seizer.key(),
-        });
-        Ok(())
-    }
-
     pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
@@ -415,17 +390,6 @@ pub struct BlacklistRemove<'info> {
     pub target: SystemAccount<'info>,
     #[account(mut)]
     pub destination: SystemAccount<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Seize<'info> {
-    pub config: Account<'info, StablecoinConfig>,
-    #[account(mut)]
-    pub from: InterfaceAccount<'info, TokenAccount>,
-    #[account(mut)]
-    pub to: InterfaceAccount<'info, TokenAccount>,
-    pub seizer: Signer<'info>,
-    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]

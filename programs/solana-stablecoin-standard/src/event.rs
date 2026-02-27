@@ -92,11 +92,3 @@ pub struct RemovedFromBlacklist {
     pub target: Pubkey,
     pub blacklister: Pubkey,
 }
-
-#[event]
-pub struct TokensSeized {
-    pub from: Pubkey,
-    pub to: Pubkey,
-    pub amount: u64,
-    pub seizer: Pubkey,
-}
