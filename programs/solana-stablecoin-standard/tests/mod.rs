@@ -100,7 +100,10 @@ mod tests {
     pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair, mint: &Keypair, mint_authority: &Pubkey, decimals: u8) {
         let token_program = TOKEN_2022_ID;
 
-        let mint_space = 82;
+        // Calculate mint space with permanent delegate extension
+        let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(
+            &[spl_token_2022::extension::ExtensionType::PermanentDelegate],
+        ).unwrap();
         let lamports = svm.minimum_balance_for_rent_exemption(mint_space);
 
         let create_mint_ix = system_instruction::create_account(
@@ -111,7 +114,15 @@ mod tests {
             &token_program,
         );
 
-        let initialize_mint_ix = spl_token_2022::instruction::initialize_mint(
+        // Add permanent delegate extension
+        let initialize_extension_ix = spl_token_2022::instruction::initialize_permanent_delegate(
+            &token_program,
+            &mint.pubkey(),
+            mint_authority,
+        ).unwrap();
+
+        // Initialize mint (must come after extension)
+        let initialize_mint_ix = spl_token_2022::instruction::initialize_mint2(
             &token_program,
             &mint.pubkey(),
             mint_authority,
@@ -122,17 +133,12 @@ mod tests {
 
         let blockhash = svm.latest_blockhash();
 
-        // println!("[DEBUG] CreateMint tx - payer: {}, mint: {}", payer.pubkey(), mint.pubkey());
-        // println!("[DEBUG] Signers: payer and mint (2 total)");
-
         let tx = Transaction::new_signed_with_payer(
-            &[create_mint_ix, initialize_mint_ix],
+            &[create_mint_ix, initialize_extension_ix, initialize_mint_ix],
             Some(&payer.pubkey()),
             &[payer, mint],
             blockhash,
         );
-
-        // println!("[DEBUG] CreateMint transaction sent");
 
         let result = svm.send_transaction(tx);
 
@@ -1348,6 +1354,178 @@ mod tests {
         assert!(result.is_err(), "thaw_account fails on non-frozen account in SPL Token");
     }
 
+    fn seize(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        source: &Pubkey,
+        destination: &Pubkey,
+        source_owner: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let (source_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), source_owner.as_ref()], &PROGRAM_ID);
+        let token_program = TOKEN_2022_ID;
+
+        let discriminator = compute_instruction_discriminator("seize");
+        let args = amount.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &args);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*source, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(source_blacklist, false),
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    #[test]
+    #[ignore = "Permanent delegate requires real cluster - not supported in LiteSVM"]
+    fn test_seize_succeeds_when_caller_is_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2 / compliant mode)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token accounts for victim and destination
+        let victim = Keypair::new();
+        let destination = Keypair::new();
+        svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
+        let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
+        
+        // Mint tokens to victim
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+
+        // Add victim to blacklist
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Seize tokens - minter has permanent_delegate extension so can transfer from any account
+        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        assert!(result.is_ok(), "seize should succeed when called by minter (permanent delegate)");
+    }
+
+    #[test]
+    fn test_seize_fails_if_caller_is_not_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2 / compliant mode)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token accounts for victim and destination
+        let victim = Keypair::new();
+        let destination = Keypair::new();
+        let non_seizer = Keypair::new();
+        svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&non_seizer.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
+        let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
+        
+        // Mint tokens to victim
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+
+        // Add victim to blacklist
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Try to seize with non-minter - should fail
+        let result = seize(svm, payer, &non_seizer, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        assert!(result.is_err(), "seize should fail when called by non-minter");
+    }
+
+    #[test]
+    fn test_seize_fails_if_source_not_blacklisted() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2 / compliant mode)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token accounts for victim and destination
+        let victim = Keypair::new();
+        let destination = Keypair::new();
+        svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
+        let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
+        
+        // Mint tokens to victim (but DON'T blacklist)
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+
+        // Try to seize - should fail (not blacklisted)
+        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        assert!(result.is_err(), "seize should fail if source not blacklisted");
+    }
+
+    #[test]
+    fn test_seize_fails_in_sss1() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 0 (SSS-1 - no seize)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Create token accounts
+        let victim = Keypair::new();
+        let destination = Keypair::new();
+        svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
+        let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
+        
+        // Mint tokens to victim
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+
+        // Try to seize in SSS-1 - should fail
+        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        assert!(result.is_err(), "seize should fail in SSS-1");
+    }
+
     #[test]
     fn test_blacklist_add_succeeds_when_caller_is_blacklister() {
         let mut setup = setup();
@@ -1380,17 +1558,96 @@ mod tests {
         // Initialize with preset 1 (SSS-2)
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
 
-        // Add to blacklist first time
+        // Add to blacklist - should succeed first time
         let target = Keypair::new();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
+        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        assert!(result.is_ok(), "blacklist_add should succeed first time");
 
         // Try to add again - should fail
-        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Another reason".to_string());
+        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
         assert!(result.is_err(), "blacklist_add should fail if already blacklisted");
     }
 
+    fn transfer(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        from: &Pubkey,
+        to: &Pubkey,
+        from_owner: &Pubkey,
+        to_owner: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let (sender_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), from_owner.as_ref()], &PROGRAM_ID);
+        let (receiver_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), to_owner.as_ref()], &PROGRAM_ID);
+        let token_program = TOKEN_2022_ID;
+
+        let discriminator = compute_instruction_discriminator("transfer");
+        let args = amount.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &args);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new_readonly(sender_blacklist, false),
+            AccountMeta::new_readonly(receiver_blacklist, false),
+            AccountMeta::new(*from, false),
+            AccountMeta::new(*to, false),
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(token_program, false),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn update_transfer_hook(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        new_hook_program: Option<Pubkey>,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("update_transfer_hook");
+        let args = new_hook_program.try_to_vec().unwrap();
+        let mut data = serialize_with_discriminator(&discriminator, &args);
+
+        let accounts = vec![
+            AccountMeta::new(config_pda, false),
+            AccountMeta::new(authority.pubkey(), true),
+        ];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
     #[test]
-    fn test_blacklist_add_fails_in_sss1() {
+    fn test_transfer_succeeds_when_hook_is_none_sss1() {
         let mut setup = setup();
         let svm = &mut setup.svm;
         let payer = &setup.payer;
@@ -1402,14 +1659,55 @@ mod tests {
         // Initialize with preset 0 (SSS-1)
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
 
-        // Try to add to blacklist in SSS-1 - should fail
-        let target = Keypair::new();
-        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
-        assert!(result.is_err(), "blacklist_add should fail in SSS-1");
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Transfer - should succeed (SSS-1 with no hook required)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_ok(), "transfer should succeed when hook is None (SSS-1)");
     }
 
     #[test]
-    fn test_blacklist_remove_succeeds_when_caller_is_blacklister() {
+    fn test_transfer_fails_without_hook_in_sss2() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2) but DON'T set hook
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Transfer - should fail (hook not set in SSS-2)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_err(), "transfer should fail when hook not set in SSS-2");
+    }
+
+    #[test]
+    fn test_transfer_succeeds_when_sender_receiver_not_blacklisted() {
         let mut setup = setup();
         let svm = &mut setup.svm;
         let payer = &setup.payer;
@@ -1421,17 +1719,28 @@ mod tests {
         // Initialize with preset 1 (SSS-2)
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
 
-        // Add to blacklist first
-        let target = Keypair::new();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
+        // Set transfer hook for compliant mode
+        update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(SSS_PROGRAM_ID)).unwrap();
 
-        // Remove from blacklist - should succeed
-        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
-        assert!(result.is_ok(), "blacklist_remove should succeed when called by blacklister");
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Transfer - should succeed (not blacklisted)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_ok(), "transfer should succeed when sender/receiver not blacklisted");
     }
 
     #[test]
-    fn test_blacklist_remove_fails_if_not_blacklisted() {
+    fn test_transfer_fails_when_sender_blacklisted() {
         let mut setup = setup();
         let svm = &mut setup.svm;
         let payer = &setup.payer;
@@ -1443,14 +1752,67 @@ mod tests {
         // Initialize with preset 1 (SSS-2)
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
 
-        // Try to remove someone not blacklisted - should fail
-        let target = Keypair::new();
-        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
-        assert!(result.is_err(), "blacklist_remove should fail if not blacklisted");
+        // Set transfer hook for compliant mode
+        update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(SSS_PROGRAM_ID)).unwrap();
+
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Add user1 to blacklist
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user1.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Transfer - should fail (sender blacklisted)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_err(), "transfer should fail when sender is blacklisted");
     }
 
     #[test]
-    fn test_blacklist_remove_fails_in_sss1() {
+    fn test_transfer_fails_when_receiver_blacklisted() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Set transfer hook for compliant mode
+        update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(SSS_PROGRAM_ID)).unwrap();
+
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Add user2 to blacklist
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user2.pubkey(), "Test reason".to_string()).unwrap();
+
+        // Transfer - should fail (receiver blacklisted)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_err(), "transfer should fail when receiver is blacklisted");
+    }
+
+    #[test]
+    fn test_transfer_fails_when_paused() {
         let mut setup = setup();
         let svm = &mut setup.svm;
         let payer = &setup.payer;
@@ -1462,9 +1824,61 @@ mod tests {
         // Initialize with preset 0 (SSS-1)
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
 
-        // Try to remove from blacklist in SSS-1 - should fail
-        let target = Keypair::new();
-        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
-        assert!(result.is_err(), "blacklist_remove should fail in SSS-1");
+        // Create token accounts
+        let user1 = Keypair::new();
+        let user2 = Keypair::new();
+        svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        
+        let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
+        
+        // Mint tokens to user1
+        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+
+        // Pause the token
+        update_paused(svm, payer, mint_authority, &mint.pubkey(), true).unwrap();
+
+        // Transfer - should fail (paused)
+        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        assert!(result.is_err(), "transfer should fail when paused");
+    }
+
+    #[test]
+    fn test_update_transfer_hook_succeeds_sss2() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 1 (SSS-2)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 1, Some(1_000_000_000_000), 6);
+
+        // Update transfer hook - should succeed
+        let new_hook = Keypair::new();
+        let result = update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(new_hook.pubkey()));
+        assert!(result.is_ok(), "update_transfer_hook should succeed in SSS-2");
+    }
+
+    #[test]
+    fn test_update_transfer_hook_fails_sss1() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+
+        // Initialize with preset 0 (SSS-1)
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Try to update transfer hook in SSS-1 - should fail
+        let new_hook = Keypair::new();
+        let result = update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(new_hook.pubkey()));
+        assert!(result.is_err(), "update_transfer_hook should fail in SSS-1");
     }
 }

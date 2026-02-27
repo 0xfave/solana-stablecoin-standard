@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke;
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 declare_id!("3cJyL8kQwwKHoUPs3MCPivExBdnFt1y5XipxChW2uKXS");
-use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 use crate::state::{BlacklistEntry, StablecoinConfig};
 
@@ -149,6 +150,46 @@ pub mod solana_stablecoin_standard {
         Ok(())
     }
 
+    pub fn seize(ctx: Context<Seize>, amount: u64) -> Result<()> {
+        let config = &ctx.accounts.config;
+        
+        require!(config.preset == 1, StablecoinError::NotCompliantMode);
+        require_keys_eq!(ctx.accounts.seizer.key(), config.minter, StablecoinError::UnauthorizedSeizer);
+        
+        let source_blacklist_key = ctx.accounts.source_blacklist.key();
+        let (expected_blacklist, _) = Pubkey::find_program_address(
+            &[b"blacklist", config.key().as_ref(), ctx.accounts.source.owner.as_ref()],
+            &ID,
+        );
+        require_keys_eq!(source_blacklist_key, expected_blacklist, StablecoinError::InvalidBlacklistAccount);
+        
+        if ctx.accounts.source_blacklist.data_len() == 0 {
+            return Err(StablecoinError::NotBlacklisted.into());
+        }
+        
+        anchor_spl::token_interface::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token_interface::Transfer {
+                    from: ctx.accounts.source.to_account_info(),
+                    to: ctx.accounts.destination.to_account_info(),
+                    authority: ctx.accounts.seizer.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+        
+        emit!(TokensSeized {
+            mint: ctx.accounts.mint.key(),
+            from: ctx.accounts.source.key(),
+            to: ctx.accounts.destination.key(),
+            amount,
+            seizer: ctx.accounts.seizer.key(),
+        });
+        
+        Ok(())
+    }
+
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
         require_keys_eq!(ctx.accounts.freezer.key(), config.freezer, StablecoinError::UnauthorizedFreezer);
@@ -221,6 +262,61 @@ pub mod solana_stablecoin_standard {
             config: ctx.accounts.config.key(),
             target,
             blacklister: ctx.accounts.authority.key(),
+        });
+        Ok(())
+    }
+
+    pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
+        let config = &ctx.accounts.config;
+        
+        if config.preset == 1 {
+            require!(
+                config.transfer_hook_program.is_some(),
+                StablecoinError::TransferHookRequired
+            );
+        }
+        
+        require!(!config.paused, StablecoinError::TransfersPaused);
+        
+        let sender_key = ctx.accounts.from.owner;
+        let (expected_sender_blacklist, _) = Pubkey::find_program_address(
+            &[b"blacklist", config.key().as_ref(), sender_key.as_ref()],
+            &ID,
+        );
+        let sender_blacklist_key = ctx.accounts.sender_blacklist.key();
+        if sender_blacklist_key == expected_sender_blacklist 
+            && *ctx.accounts.sender_blacklist.owner == ID {
+            return Err(StablecoinError::SenderBlacklisted.into());
+        }
+        
+        let receiver_key = ctx.accounts.to.owner;
+        let (expected_receiver_blacklist, _) = Pubkey::find_program_address(
+            &[b"blacklist", config.key().as_ref(), receiver_key.as_ref()],
+            &ID,
+        );
+        let receiver_blacklist_key = ctx.accounts.receiver_blacklist.key();
+        if receiver_blacklist_key == expected_receiver_blacklist 
+            && *ctx.accounts.receiver_blacklist.owner == ID {
+            return Err(StablecoinError::ReceiverBlacklisted.into());
+        }
+        
+        anchor_spl::token_interface::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token_interface::Transfer {
+                    from: ctx.accounts.from.to_account_info(),
+                    to: ctx.accounts.to.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                },
+            ),
+            amount,
+        )?;
+        
+        emit!(TokensTransferred {
+            from: ctx.accounts.from.key(),
+            to: ctx.accounts.to.key(),
+            amount,
+            authority: ctx.accounts.authority.key(),
         });
         Ok(())
     }
@@ -340,6 +436,21 @@ pub struct Burn<'info> {
 }
 
 #[derive(Accounts)]
+pub struct Seize<'info> {
+    pub config: Account<'info, StablecoinConfig>,
+    #[account(mut)]
+    pub mint: InterfaceAccount<'info, Mint>,
+    #[account(mut)]
+    pub source: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub destination: InterfaceAccount<'info, TokenAccount>,
+    /// CHECK: Address is validated in instruction logic
+    pub source_blacklist: UncheckedAccount<'info>,
+    pub seizer: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
 pub struct FreezeAccount<'info> {
     pub config: Account<'info, StablecoinConfig>,
     pub mint: InterfaceAccount<'info, Mint>,
@@ -390,6 +501,21 @@ pub struct BlacklistRemove<'info> {
     pub target: SystemAccount<'info>,
     #[account(mut)]
     pub destination: SystemAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Transfer<'info> {
+    pub config: Account<'info, StablecoinConfig>,
+    /// CHECK: Address is validated in instruction logic
+    pub sender_blacklist: UncheckedAccount<'info>,
+    /// CHECK: Address is validated in instruction logic
+    pub receiver_blacklist: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub from: InterfaceAccount<'info, TokenAccount>,
+    #[account(mut)]
+    pub to: InterfaceAccount<'info, TokenAccount>,
+    pub authority: Signer<'info>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]

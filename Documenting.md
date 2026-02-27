@@ -12,7 +12,7 @@ This document explains the key systems and design decisions in the Solana Stable
 4. [PDA-Based Account Derivation](#4-pda-based-account-derivation)
 5. [Preset System (Compliant vs Non-Compliant)](#5-preset-system-compliant-vs-non-compliant)
 6. [Blacklist System](#6-blacklist-system)
-7. [Seize Functionality](#7-seize-functionality)
+7. [Built-in Transfer with Compliance Checks](#7-built-in-transfer-with-compliance-checks)
 8. [CPI for Token Operations](#8-cpi-for-token-operations)
 9. [Event Emission](#9-event-emission)
 10. [Master Authority Pattern](#10-master-authority-pattern)
@@ -113,12 +113,12 @@ This document explains the key systems and design decisions in the Solana Stable
 **What it is:** A `preset` field in the config that determines which features are available:
 
 - `preset = 0`: Non-compliant mode - basic stablecoin operations only
-- `preset = 1`: Compliant mode - enables blacklist, seize, transfer hook, and extra account meta list
+- `preset = 1`: Compliant mode - enables blacklist, freeze, transfer hook, and extra account meta list
 
 **Why it's used:**
 
 - **Regulatory Flexibility:** Different jurisdictions have different requirements. Non-compliant mode works for unrestricted tokens, compliant mode enables KYC/AML features
-- **Feature Gating:** Dangerous features like seize are only available in compliant mode
+- **Feature Gating:** Advanced features like blacklist and freeze are only available in compliant mode
 - **User Choice:** Deployers choose the preset that fits their use case
 - **Minimal Footprint:** Non-compliant mode is simpler and cheaper to operate
 
@@ -138,37 +138,75 @@ This document explains the key systems and design decisions in the Solana Stable
 - Reason for blacklisting (up to 200 characters)
 - Unix timestamp of blacklisting
 
+**Implementation Details:**
+
+The blacklist check in the transfer instruction uses `UncheckedAccount` for blacklist entries. This is necessary because Anchor doesn't support optional accounts with seed constraints. The validation logic:
+
+1. Computes expected blacklist PDA: `seeds = [b"blacklist", config.key(), target.key()]`
+2. Checks if provided account matches expected PDA and is owned by the program (account exists)
+
+```rust
+let (expected_sender_blacklist, _) = Pubkey::find_program_address(
+    &[b"blacklist", config.key().as_ref(), sender_key.as_ref()],
+    &ID,
+);
+let sender_blacklist_key = ctx.accounts.sender_blacklist.key();
+if sender_blacklist_key == expected_sender_blacklist 
+    && *ctx.accounts.sender_blacklist.owner == ID {
+    return Err(StablecoinError::SenderBlacklisted.into());
+}
+```
+
 **Why it's used:**
 
 - **Regulatory Compliance:** Many jurisdictions require the ability to block sanctioned/fraudulent accounts
 - **Fraud Prevention:** Can freeze funds of compromised accounts
 - **Audit Trail:** Stores who blacklisted, when, and why - important for compliance
 - **PDAs for Security:** Blacklist entries are PDAs controlled by the program, not user-controlled
+- **Dual Protection:** Built-in transfer instruction + transfer hook provides defense in depth
 
 **Benefits over alternatives:**
 
 - vs Transfer Hook Only: Provides on-chain record of blacklisting with reason/timestamp
 - vs Freeze Account: Blacklisting is more explicit and trackable
-- vs Data Length Check: Uses account existence (data_len > 0) as the blacklist check - cheap and reliable
+- vs Data Length Check: Uses account existence (owner check) as the blacklist check - cheap and reliable
 - vs Separate Blacklist Program: Integrated into main program for atomic operations
 
 ---
 
-## 7. Seize Functionality
+## 7. Built-in Transfer with Compliance Checks
 
-**What it is:** Allows the master authority in compliant mode to forcibly transfer tokens from a blacklisted account to a designated destination (e.g., a treasury).
+**What it is:** The stablecoin program includes a native `transfer` instruction that performs compliance checks (pause + blacklist) before executing the transfer via CPI to Token-2022.
+
+**Compliance Mode Requirements:**
+
+- **SSS-1 (preset=0):** Transfer works without a transfer hook - simpler mode for unrestricted tokens
+- **SSS-2 (preset=1):** Transfer requires `transfer_hook_program` to be set - ensures full compliance protection
 
 **Why it's used:**
 
-- **Asset Recovery:** Enables recovery of funds from sanctioned or fraudulent accounts as required by law
-- **Treasury Management:** Seized funds can go to a controlled treasury for later disposal
-- **Enables Blacklist Utility:** Without seize, blacklisting just freezes funds - seize allows actual removal
+- **Defense in Depth:** Even if users call Token-2022's native transfer directly, when the transfer hook is set, Token-2022 automatically calls the hook which enforces compliance
+- **Pause Functionality:** Transfers can be paused globally via the `paused` flag in config
+- **Blacklist Enforcement:** Both sender and receiver are checked against the blacklist before transfer
+- **Atomic Operation:** All compliance checks happen in the same transaction as the transfer
+
+**Important:** For full protection in compliant mode, you MUST call `update_transfer_hook` after initialization to set the compliance hook program. Without this, users can bypass compliance by calling Token-2022's native transfer directly.
+
+**Implementation:**
+
+The transfer instruction accepts two optional blacklist accounts (sender and receiver). Since Anchor doesn't support optional accounts with seed constraints, it uses `UncheckedAccount` and validates manually:
+
+1. In compliant mode, verifies `transfer_hook_program` is set
+2. Computes expected blacklist PDA from sender/receiver owner
+3. Verifies provided account matches expected PDA
+4. Checks account is owned by the stablecoin program (exists)
+5. If all checks pass, performs CPI to Token-2022
 
 **Benefits over alternatives:**
 
-- vs Burn Only: Seize keeps tokens in circulation (can be treasury-managed), burn removes from supply
-- vs No Recovery: Provides legal/regulatory path to recover funds
-- vs Manual Process: Programmatic - no need for manual token movement by authority
+- vs Transfer Hook Only: Works with or without hook - provides flexibility
+- vs Custom Transfer Logic: Uses standard Token-2022 CPI for security
+- vs Multiple Transactions: Single transaction for compliance + transfer
 
 ---
 
@@ -224,25 +262,24 @@ anchor_spl::token_interface::mint_to(
 
 ## 10. Master Authority Pattern
 
-**What it is:** A single `master_authority` key in the config that has control over:
+**What it is:** A single `master_authority` key in the config that has control over the stablecoin, with separate role accounts for:
 
-- Minting/Burning
-- Freezing/Thawing
-- Pausing
-- Blacklisting
-- Seizing
-- Updating transfer hook
+- **Minter:** Can mint new tokens
+- **Freezer:** Can freeze/unfreeze accounts
+- **Pauser:** Can pause/unpause transfers
+- **Blacklister:** Can add/remove from blacklist
 
 **Why it's used:**
 
 - **Simplicity:** Single authority key simplifies permission management
 - **Security Model:** Clear line of authority - whoever controls master_authority controls the stablecoin
-- **Multi-Sig Ready:** The authority can be a multi-sig or another program (like a governance module)
+- **Role Separation:** Different roles can be assigned to different keys for security (e.g., different keys for minting vs blacklisting)
+- **Multi-Sig Ready:** Any role can be a multi-sig or another program (like a governance module)
 - **Pending Authority:** Supports authority transfer via `pending_master_authority` field
 
 **Benefits over alternatives:**
 
-- vs Role-Based Access: Simpler - single authority instead of multiple roles
+- vs Single Role: Role separation provides better security -Compromise of one role doesn't compromise all
 - vs DAO-First: Can evolve from single authority to DAO later
 - vs Separate Admin Program: Single program reduces complexity
 

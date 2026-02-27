@@ -36,4 +36,8 @@ pub enum StablecoinError {
     InvalidAccount,
     #[msg("Cannot blacklist zero address")]
     BlacklistZeroAddress,
+    #[msg("Invalid blacklist account")]
+    InvalidBlacklistAccount,
+    #[msg("Transfer hook must be set in compliant mode")]
+    TransferHookRequired,
 }
