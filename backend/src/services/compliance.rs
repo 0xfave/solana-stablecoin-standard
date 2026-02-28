@@ -310,3 +310,144 @@ impl ComplianceService {
         transactions.get(tx_id).cloned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_check_address_clear() {
+        let service = ComplianceService::new(None);
+
+        let result = service.check_address("ClearAddress123").await;
+        assert!(result.allowed);
+        assert_eq!(result.risk_score, 0);
+    }
+
+    #[tokio::test]
+    async fn test_add_to_blacklist() {
+        let service = ComplianceService::new(None);
+
+        let result = service.add_to_blacklist(
+            "BadActor123".to_string(),
+            "Fraudulent activity".to_string(),
+            "admin".to_string(),
+        ).await;
+
+        assert!(result.is_ok());
+
+        let check = service.check_address("BadActor123").await;
+        assert!(!check.allowed);
+        assert!(check.reason.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_remove_from_blacklist() {
+        let service = ComplianceService::new(None);
+
+        service.add_to_blacklist(
+            "AddressToRemove".to_string(),
+            "Reason".to_string(),
+            "admin".to_string(),
+        ).await.unwrap();
+
+        let before = service.check_address("AddressToRemove").await;
+        assert!(!before.allowed);
+
+        service.remove_from_blacklist("AddressToRemove", "admin").await.unwrap();
+
+        let after = service.check_address("AddressToRemove").await;
+        assert!(after.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_check_transaction_both_clear() {
+        let service = ComplianceService::new(None);
+
+        let result = service.check_transaction("Sender123", "Receiver456", 100).await;
+        assert!(result.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_check_transaction_sender_blacklisted() {
+        let service = ComplianceService::new(None);
+
+        service.add_to_blacklist(
+            "BlacklistedSender".to_string(),
+            "Sanctions".to_string(),
+            "admin".to_string(),
+        ).await.unwrap();
+
+        let result = service.check_transaction("BlacklistedSender", "Receiver456", 100).await;
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_check_transaction_receiver_blacklisted() {
+        let service = ComplianceService::new(None);
+
+        service.add_to_blacklist(
+            "BlacklistedReceiver".to_string(),
+            "Sanctions".to_string(),
+            "admin".to_string(),
+        ).await.unwrap();
+
+        let result = service.check_transaction("Sender123", "BlacklistedReceiver", 100).await;
+        assert!(!result.allowed);
+    }
+
+    #[tokio::test]
+    async fn test_large_transaction_flag() {
+        let service = ComplianceService::new(None);
+
+        let result = service.check_transaction("Sender123", "Receiver456", 20000).await;
+        assert!(result.allowed);
+        assert!(result.rules_triggered.iter().any(|r| r == "R002"));
+        assert!(result.risk_score > 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_blacklist() {
+        let service = ComplianceService::new(None);
+
+        service.add_to_blacklist("Addr1".to_string(), "Reason1".to_string(), "admin".to_string()).await.unwrap();
+        service.add_to_blacklist("Addr2".to_string(), "Reason2".to_string(), "admin".to_string()).await.unwrap();
+
+        let blacklist = service.get_blacklist().await;
+        assert_eq!(blacklist.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_add_and_update_rule() {
+        let service = ComplianceService::new(None);
+
+        let new_rule = ComplianceRule {
+            rule_id: "TEST001".to_string(),
+            name: "Test Rule".to_string(),
+            enabled: true,
+            action: ComplianceAction::Block,
+        };
+
+        service.add_rule(new_rule).await;
+
+        let rules = service.get_rules().await;
+        assert!(rules.iter().any(|r| r.rule_id == "TEST001"));
+
+        service.update_rule("TEST001", false).await.unwrap();
+
+        let rules_after = service.get_rules().await;
+        let test_rule = rules_after.iter().find(|r| r.rule_id == "TEST001").unwrap();
+        assert!(!test_rule.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_export_audit_log() {
+        let service = ComplianceService::new(None);
+
+        service.add_to_blacklist("Addr1".to_string(), "Reason".to_string(), "admin".to_string()).await.unwrap();
+        service.add_to_blacklist("Addr2".to_string(), "Reason".to_string(), "admin".to_string()).await.unwrap();
+
+        let audit = service.export_audit_log(None, None).await;
+        assert!(audit.len() >= 2);
+    }
+}

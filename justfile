@@ -69,7 +69,11 @@ backend-deps:
 
 # Build backend
 backend-build:
-    cd backend && cargo build --release
+	cd backend && cargo build --release
+
+# Run backend tests
+backend-test:
+	cd backend && cargo test
 
 # Run backend in development mode
 backend-run:
@@ -84,7 +88,19 @@ backend-docker-build:
     cd backend && docker build -t sss-backend .
 
 backend-docker-run:
-    docker run -p 3000:3000 --env-file backend/.env sss-backend
+	docker run -p 3000:3000 --env-file backend/.env sss-backend
+
+# SDK: build TypeScript SDK
+sdk-build:
+	cd sdk && yarn install && yarn build
+	@echo "SDK built at sdk/dist/"
+
+# SDK: run SDK tests
+sdk-test:
+	cd sdk && yarn test
+
+# SDK: all (install + build)
+sdk: sdk-build
 
 # Full stack: build programs + build backend
 full-stack: build-all backend-build

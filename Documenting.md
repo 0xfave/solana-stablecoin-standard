@@ -18,6 +18,9 @@ This document explains the key systems and design decisions in the Solana Stable
 10. [Event Emission](#10-event-emission)
 11. [Master Authority Pattern](#11-master-authority-pattern)
 12. [Backend Services](#12-backend-services)
+13. [Deployed Program IDs](#deployed-program-ids)
+14. [SDK](#sdk)
+15. [Testing](#testing)
 
 ---
 
@@ -677,3 +680,87 @@ cargo run --manifest-path backend/Cargo.toml
 # Or with just
 just backend-run
 ```
+
+## Deployed Program IDs
+
+| Network | Program | Program ID |
+|---------|---------|------------|
+| Devnet | solana_stablecoin_standard | `Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6` |
+| Devnet | sss_compliance_hook | `2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88` |
+
+## SDK
+
+The TypeScript SDK (`sdk/`) provides a simple API for interacting with the SSS program.
+
+### Install
+
+```bash
+npm install @stbr/sss-token
+# or
+just sdk-build
+```
+
+### Usage
+
+```typescript
+import { SolanaStablecoin, Presets } from "@stbr/sss-token";
+import { Connection } from "@solana/web3.js";
+
+// Preset initialization
+const stable = await SolanaStablecoin.create(connection, {
+  preset: Presets.SSS_2,
+  name: "My Stablecoin",
+  symbol: "MYUSD",
+  decimals: 6,
+  authority: adminKeypair,
+});
+
+// Or fetch existing
+const stable = await SolanaStablecoin.fetch(connection, mintAddress);
+
+// Operations
+await stable.mint({ recipient, amount: 1_000_000, minter });
+await stable.burn({ account, amount, authority });
+await stable.transfer({ from, to, amount, authority });
+
+// Compliance (SSS-2 only)
+await stable.compliance.blacklistAdd(address, "Sanctions match");
+await stable.compliance.seize(frozenAccount, treasury);
+await stable.compliance.freeze(account, authority);
+
+// Query
+const supply = await stable.getTotalSupply();
+```
+
+### Commands
+
+```bash
+just sdk-build   # Build SDK
+just sdk-test    # Run SDK tests
+just sdk         # Install + build
+```
+```
+
+---
+
+## Testing
+
+### Unit Tests (Backend)
+
+```bash
+just backend-test
+```
+
+### Integration Tests (On-chain)
+
+```bash
+just test
+```
+
+### Run Devnet Validator
+
+```bash
+solana-test-validator
+```
+
+---

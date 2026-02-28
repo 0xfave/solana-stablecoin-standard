@@ -6,8 +6,12 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_stablecoin_standard = "3cJyL8kQwwKHoUPs3MCPivExBdnFt1y5XipxChW2uKXS"
-sss_compliance_hook = "bV4wzw656CmBsyL3ZYKJe3SaE6QiqY1nc8SnuFgrqSG"
+solana_stablecoin_standard = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+sss_compliance_hook = "2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88"
+
+[programs.devnet]
+solana_stablecoin_standard = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+sss_compliance_hook = "2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88"
 
 [registry]
 url = "https://api.apr.dev"

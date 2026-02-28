@@ -215,8 +215,6 @@ impl MintBurnService {
         if let Some(sig) = signature {
             request.signature = Some(sig.clone());
         }
-
-        let result = request.clone();
         
         if matches!(status, MintStatus::Confirmed) {
             request.confirmed_at = Some(Utc::now());
@@ -239,6 +237,8 @@ impl MintBurnService {
             }
         }
 
+        let result = request.clone();
+        
         Ok(result)
     }
 
@@ -358,5 +358,208 @@ impl MintBurnService {
     pub async fn get_mints_by_fiat_tx(&self, fiat_tx_id: &str) -> Option<MintRequest> {
         let mints = self.pending_mints.read().await;
         mints.iter().find(|m| m.fiat_tx_id == fiat_tx_id).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_mint_request_creation() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let result = service.create_mint_request(
+            "UserWallet123".to_string(),
+            1000,
+            "fiat_tx_123".to_string(),
+            "custodian_1".to_string(),
+        ).await;
+
+        assert!(result.is_ok());
+        let request = result.unwrap();
+        assert_eq!(request.amount, 1000);
+        assert_eq!(request.user_wallet, "UserWallet123");
+        assert_eq!(request.status, MintStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_mint_request_zero_amount() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let result = service.create_mint_request(
+            "UserWallet123".to_string(),
+            0,
+            "fiat_tx_123".to_string(),
+            "custodian_1".to_string(),
+        ).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_mint_request() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet123".to_string(),
+            1000,
+            "fiat_tx_123".to_string(),
+            "custodian_1".to_string(),
+        ).await.unwrap();
+
+        let fetched = service.get_mint_request(&created.id).await;
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().id, created.id);
+    }
+
+    #[tokio::test]
+    async fn test_get_mints_by_wallet() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        service.create_mint_request(
+            "Wallet1".to_string(),
+            100,
+            "tx1".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        service.create_mint_request(
+            "Wallet1".to_string(),
+            200,
+            "tx2".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        service.create_mint_request(
+            "Wallet2".to_string(),
+            300,
+            "tx3".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        let wallet1_mints = service.get_mints_by_wallet("Wallet1").await;
+        assert_eq!(wallet1_mints.len(), 2);
+
+        let wallet2_mints = service.get_mints_by_wallet("Wallet2").await;
+        assert_eq!(wallet2_mints.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_update_mint_status() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet".to_string(),
+            1000,
+            "fiat_tx".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        let updated = service.update_mint_status(
+            &created.id,
+            MintStatus::Confirmed,
+            Some("sig123".to_string()),
+        ).await.unwrap();
+
+        assert_eq!(updated.status, MintStatus::Confirmed);
+        assert_eq!(updated.signature.unwrap(), "sig123");
+        assert!(updated.confirmed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fail_mint() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet".to_string(),
+            1000,
+            "fiat_tx".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        let failed = service.fail_mint(&created.id, "Insufficient funds".to_string()).await.unwrap();
+
+        assert_eq!(failed.status, MintStatus::Failed);
+        assert_eq!(failed.error.unwrap(), "Insufficient funds");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_mint() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet".to_string(),
+            1000,
+            "fiat_tx".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        let cancelled = service.cancel_mint(&created.id).await.unwrap();
+        assert_eq!(cancelled.status, MintStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_mint_already_processed_fails() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet".to_string(),
+            1000,
+            "fiat_tx".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        service.update_mint_status(&created.id, MintStatus::Processing, None).await.unwrap();
+
+        let result = service.cancel_mint(&created.id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_burn_request_creation() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let result = service.create_burn_request(
+            "UserWallet123".to_string(),
+            "TokenAccount456".to_string(),
+            500,
+            "bank_account".to_string(),
+            "custodian_1".to_string(),
+        ).await;
+
+        assert!(result.is_ok());
+        let request = result.unwrap();
+        assert_eq!(request.amount, 500);
+        assert_eq!(request.status, BurnStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn test_get_mints_by_fiat_tx() {
+        let config = MintBurnConfig::default();
+        let service = MintBurnService::new(config);
+
+        let created = service.create_mint_request(
+            "UserWallet".to_string(),
+            1000,
+            "unique_fiat_tx_123".to_string(),
+            "custodian".to_string(),
+        ).await.unwrap();
+
+        let found = service.get_mints_by_fiat_tx("unique_fiat_tx_123").await;
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, created.id);
+
+        let not_found = service.get_mints_by_fiat_tx("nonexistent").await;
+        assert!(not_found.is_none());
     }
 }

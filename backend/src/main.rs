@@ -19,7 +19,7 @@ use services::rpc::RpcClient;
 use services::mint_burn::{MintBurnService, MintBurnConfig, MintRequest, BurnRequest};
 use services::compliance::ComplianceService;
 use services::events::{EventIndexer, EventListener, ListenerConfig, OnChainEvent};
-use services::webhook::{WebhookManager, WebhookConfig, WebhookService};
+use services::webhook::{WebhookConfig, WebhookService};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -226,7 +226,7 @@ async fn main() {
 
     let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8899".to_string());
     let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "ws://localhost:8900".to_string());
-    let program_id_str = std::env::var("PROGRAM_ID").unwrap_or_else(|_| "SSSysT1WSh3HPg1GqJL3iKzR5P5vV4F6xT2N9K8mP1".to_string());
+    let program_id_str = std::env::var("PROGRAM_ID").unwrap_or_else(|_| "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6".to_string());
     let program_id = program_id_str.parse::<Pubkey>().unwrap_or_default();
 
     info!("Starting SSS Backend with program: {}", program_id);

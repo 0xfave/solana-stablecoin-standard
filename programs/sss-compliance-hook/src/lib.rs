@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount};
 use spl_transfer_hook_interface::instruction::TransferHookInstruction;
 
-declare_id!("bV4wzw656CmBsyL3ZYKJe3SaE6QiqY1nc8SnuFgrqSG");
+declare_id!("2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88");
 
 pub mod state;
 

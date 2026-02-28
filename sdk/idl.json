@@ -1,0 +1,254 @@
+{
+  "version": "0.1.0",
+  "name": "solana_stablecoin_standard",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        { "name": "config", "isMut": true, "isSigner": false },
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "preset", "type": "u8" },
+        { "name": "supplyCap", "type": "u64" }
+      ]
+    },
+    {
+      "name": "mintTo",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "to", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "burn",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "from", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "transfer",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "from", "isMut": true, "isSigner": false },
+        { "name": "to", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "freeze",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "account", "isMut": true, "isSigner": false },
+        { "name": "freezer", "isMut": false, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "thaw",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "account", "isMut": true, "isSigner": false },
+        { "name": "freezer", "isMut": false, "isSigner": true },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": []
+    },
+    {
+      "name": "addToBlacklist",
+      "accounts": [
+        { "name": "config", "isMut": false, "isSigner": false },
+        { "name": "blacklistEntry", "isMut": true, "isSigner": false },
+        { "name": "target", "isMut": false, "isSigner": false },
+        { "name": "blacklister", "isMut": false, "isSigner": true },
+        { "name": "systemProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "reason", "type": "string" }
+      ]
+    },
+    {
+      "name": "removeFromBlacklist",
+      "accounts": [
+        { "name": "config", "isMut": false, "isSigner": false },
+        { "name": "blacklistEntry", "isMut": true, "isSigner": false },
+        { "name": "remover", "isMut": false, "isSigner": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "seize",
+      "accounts": [
+        { "name": "mint", "isMut": false, "isSigner": false },
+        { "name": "source", "isMut": true, "isSigner": false },
+        { "name": "destination", "isMut": true, "isSigner": false },
+        { "name": "seizer", "isMut": false, "isSigner": true },
+        { "name": "blacklistEntry", "isMut": false, "isSigner": false },
+        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+      ],
+      "args": [
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "setPause",
+      "accounts": [
+        { "name": "config", "isMut": true, "isSigner": false },
+        { "name": "pauser", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "paused", "type": "bool" }
+      ]
+    },
+    {
+      "name": "updateTransferHook",
+      "accounts": [
+        { "name": "mint", "isMut": true, "isSigner": false },
+        { "name": "authority", "isMut": false, "isSigner": true }
+      ],
+      "args": [
+        { "name": "hookProgramId", "type": "pubkey" }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "StablecoinConfig",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "mint", "type": "pubkey" },
+          { "name": "authority", "type": "pubkey" },
+          { "name": "preset", "type": "u8" },
+          { "name": "supplyCap", "type": "u64" },
+          { "name": "currentSupply", "type": "u64" },
+          { "name": "paused", "type": "bool" },
+          { "name": "transferHookProgram", "type": "pubkey" },
+          { "name": "minter", "type": "pubkey" },
+          { "name": "freezer", "type": "pubkey" },
+          { "name": "pauser", "type": "pubkey" },
+          { "name": "blacklister", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "BlacklistEntry",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "blacklister", "type": "pubkey" },
+          { "name": "reason", "type": "string" },
+          { "name": "timestamp", "type": "i64" }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "ConfigInitialized",
+      "fields": [
+        { "name": "mint", "type": "pubkey" },
+        { "name": "authority", "type": "pubkey" },
+        { "name": "preset", "type": "u8" }
+      ]
+    },
+    {
+      "name": "TokensMinted",
+      "fields": [
+        { "name": "mint", "type": "pubkey" },
+        { "name": "to", "type": "pubkey" },
+        { "name": "amount", "type": "u64" },
+        { "name": "minter", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "TokensBurned",
+      "fields": [
+        { "name": "mint", "type": "pubkey" },
+        { "name": "from", "type": "pubkey" },
+        { "name": "amount", "type": "u64" },
+        { "name": "burner", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "AccountFrozen",
+      "fields": [
+        { "name": "account", "type": "pubkey" },
+        { "name": "mint", "type": "pubkey" },
+        { "name": "freezer", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "AccountThawed",
+      "fields": [
+        { "name": "account", "type": "pubkey" },
+        { "name": "mint", "type": "pubkey" },
+        { "name": "freezer", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "AddedToBlacklist",
+      "fields": [
+        { "name": "config", "type": "pubkey" },
+        { "name": "target", "type": "pubkey" },
+        { "name": "reason", "type": "string" },
+        { "name": "blacklister", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "RemovedFromBlacklist",
+      "fields": [
+        { "name": "config", "type": "pubkey" },
+        { "name": "target", "type": "pubkey" },
+        { "name": "remover", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "TokensSeized",
+      "fields": [
+        { "name": "mint", "type": "pubkey" },
+        { "name": "from", "type": "pubkey" },
+        { "name": "to", "type": "pubkey" },
+        { "name": "amount", "type": "u64" },
+        { "name": "seizer", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "PausedChanged",
+      "fields": [
+        { "name": "paused", "type": "bool" },
+        { "name": "pauser", "type": "pubkey" }
+      ]
+    }
+  ],
+  "errors": [
+    { "code": 100, "name": "AlreadyInitialized", "msg": "Already initialized" },
+    { "code": 101, "name": "NotInitialized", "msg": "Not initialized" },
+    { "code": 102, "name": "InvalidPreset", "msg": "Invalid preset" },
+    { "code": 103, "name": "SupplyCapExceeded", "msg": "Supply cap exceeded" },
+    { "code": 104, "name": "Paused", "msg": "Transfers are paused" },
+    { "code": 105, "name": "SenderBlacklisted", "msg": "Sender is blacklisted" },
+    { "code": 106, "name": "ReceiverBlacklisted", "msg": "Receiver is blacklisted" },
+    { "code": 107, "name": "AccountFrozen", "msg": "Account is frozen" },
+    { "code": 108, "name": "Unauthorized", "msg": "Unauthorized" },
+    { "code": 109, "name": "ComplianceOnly", "msg": "Feature only available in compliant mode" }
+  ]
+}

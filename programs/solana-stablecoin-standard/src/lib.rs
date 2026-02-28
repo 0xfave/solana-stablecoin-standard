@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-declare_id!("3cJyL8kQwwKHoUPs3MCPivExBdnFt1y5XipxChW2uKXS");
+declare_id!("Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6");
 
 use crate::state::{BlacklistEntry, StablecoinConfig};
 
