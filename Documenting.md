@@ -17,6 +17,7 @@ This document explains the key systems and design decisions in the Solana Stable
 9. [CPI for Token Operations](#9-cpi-for-token-operations)
 10. [Event Emission](#10-event-emission)
 11. [Master Authority Pattern](#11-master-authority-pattern)
+12. [Backend Services](#12-backend-services)
 
 ---
 
@@ -325,6 +326,225 @@ anchor_spl::token_interface::mint_to(
 
 ---
 
+## 11. Backend Services
+
+**What it is:** A Rust/Axum-based backend service that provides:
+
+- **Event Listener/Indexer:** Subscribes to on-chain events (mint, burn, freeze, seize, etc.)
+- **Webhook Service:** Delivers events to external endpoints with retry logic
+- **Compliance Service:** Maintains blacklist state, checks transactions against rules
+- **RPC Client:** Interfaces with Solana RPC for account data
+
+**Why it's used:**
+
+- **Real-time Processing:** Backend can react to on-chain events immediately
+- **External Integrations:** Webhooks notify external systems (custodians, issuers)
+- **Compliance Automation:** Automatic transaction monitoring and blacklist sync
+- **Frontend API:** Provides REST API for frontend integration
+
+**Implementation Details:**
+
+- Uses `tokio` for async runtime
+- `axum` for HTTP server
+- `reqwest` for webhook HTTP calls with retry logic
+- `solana-client` for RPC calls
+- Event channel using `tokio::sync::mpsc`
+
+**Benefits over alternatives:**
+
+- vs WebSocket Only: More robust - can persist events to database
+- vs Serverless: Stateful service with in-memory compliance checking
+- vs Full Indexer: Lightweight event listener instead of full transaction history
+
+### Backend Architecture Diagram
+
+```mermaid
+flowchart TB
+    subgraph Solana["Solana Blockchain"]
+        direction TB
+        RPC[("RPC / WebSocket")]
+        Events[("On-Chain Events")]
+        SSS[("SSS Program")]
+    end
+
+    subgraph Backend["SSS Backend Service"]
+        direction TB
+        
+        subgraph Ingest["Event Ingestion"]
+            RPCClient["RPC Client"]
+            EventListener["Event Listener"]
+            EventIndexer["Event Indexer"]
+        end
+        
+        subgraph Process["Processing"]
+            Compliance["Compliance Service"]
+            WebhookManager["Webhook Manager"]
+        end
+        
+        subgraph Storage["Storage"]
+            BlacklistDB["Blacklist Store"]
+            AuditLog["Audit Log"]
+            RulesDB["Compliance Rules"]
+        end
+        
+        subgraph API["HTTP API"]
+            Health["/health"]
+            Webhook["/webhook"]
+            APIRoutes["/api/*"]
+        end
+        
+        RPCClient --> EventListener
+        EventListener --> EventIndexer
+        EventIndexer --> Compliance
+        EventIndexer --> WebhookManager
+        Compliance --> BlacklistDB
+        Compliance --> AuditLog
+        Compliance --> RulesDB
+    end
+
+    subgraph External["External Systems"]
+        Custodian["Custodian"]
+        Issuer["Stablecoin Issuer"]
+        Frontend["Frontend"]
+    end
+
+    Solana -->|"Events"| RPCClient
+    WebhookManager -->|"HTTP + Retry"| Custodian
+    WebhookManager -->|"HTTP + Retry"| Issuer
+    APIRoutes --> Frontend
+    Health -->|"Health Check"| Frontend
+
+    style Backend fill:#1e40af,color:#fff
+    style Solana fill:#059669,color:#fff
+    style External fill:#dc2626,color:#fff
+    style Storage fill:#7c3aed,color:#fff
+```
+
+### Service Flow
+
+```mermaid
+sequenceDiagram
+    participant S as Solana Network
+    participant EL as Event Listener
+    participant EI as Event Indexer
+    participant C as Compliance Service
+    participant WM as Webhook Manager
+    participant Ext as External System
+    
+    S->>EL: Transaction confirmed
+    EL->>EI: Parse events from tx
+    EI->>C: Check transaction compliance
+    C->>C: Validate against rules
+    C->>C: Record to audit log
+    C-->>EI: Compliance result
+    EI->>WM: Queue event for delivery
+    WM->>Ext: POST webhook (with retry)
+    Ext-->>WM: 200 OK
+```
+
+**Key Design Decisions:**
+
+1. **Async Processing:** Uses `tokio` for non-blocking event handling - critical for high-throughput scenarios
+2. **Retry Logic:** Exponential backoff with configurable attempts - ensures event delivery reliability
+3. **In-Memory State:** Compliance service keeps blacklist/rules in memory (RwLock) for fast checks
+4. **Thread Safety:** Uses Arc<RwLock<T>> for shared state across async tasks
+5. **Separation:** Each service (events, webhook, compliance) is modular and can be tested independently
+
+### Mint/Burn Service
+
+The Mint/Burn service coordinates the fiat-to-stablecoin lifecycle for custodial on/off ramping:
+
+**Request Lifecycle:**
+1. `Pending` - Request created, awaiting processing
+2. `Processing` - Backend is building/submitting transaction
+3. `AwaitingConfirmation` - Transaction submitted, waiting for confirmation
+4. `Confirmed` - Transaction confirmed on-chain
+5. `Failed` - Transaction failed
+6. `Cancelled` - Request cancelled (pending only)
+
+**Flow:**
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant API as Backend API
+    participant MB as Mint/Burn Service
+    participant S as Solana
+    participant W as Webhook
+    
+    U->>API: Request mint (fiat tx confirmed)
+    API->>MB: Create mint request
+    MB-->>U: Return request ID
+    
+    MB->>S: Submit mint transaction
+    S-->>MB: Transaction signature
+    MB->>MB: Update status to AwaitingConfirmation
+    
+    loop Poll for confirmation
+        MB->>S: Check signature status
+    end
+    
+    S-->>MB: Confirmed
+    MB->>MB: Update status to Confirmed
+    MB->>W: Emit TokensMinted event
+    MB-->>U: Notify confirmed
+```
+
+**Key Methods:**
+- `create_mint_request()` - Create pending mint request
+- `create_burn_request()` - Create pending burn request
+- `update_mint_status()` / `update_burn_status()` - Update status and emit events
+- `get_mints_by_wallet()` / `get_burns_by_wallet()` - Query by user
+
+**Design Decisions:**
+1. **Status Machine:** Clear state transitions prevent duplicate processing
+2. **Event Emission:** Confirmed mints/burns emit events to webhook service
+3. **In-Memory Tracking:** Fast lookups without database for MVP
+4. **Separation of Concerns:** Transaction submission handled externally via status updates
+
+### Event Listener
+
+The Event Listener connects to Solana's websocket to receive real-time events:
+
+**Implementation:**
+- Connects to Solana websocket via `logsSubscribe` 
+- Filters for mentions of the SSS program ID
+- Fetches full transaction data for each signature
+- Parses program logs to extract events
+- Sends events to the event channel for processing
+
+**Flow:**
+```mermaid
+sequenceDiagram
+    participant S as Solana Network
+    participant L as Event Listener
+    participant R as RPC
+    participant C as Event Channel
+    
+    L->>S: Connect websocket
+    S-->>L: Subscribed
+    L->>S: Subscribe to program logs
+    S->>L: New log (signature)
+    L->>R: getTransaction(signature)
+    R-->>L: Transaction data
+    L->>L: Parse logs for events
+    L->>C: Send OnChainEvent
+    C-->>L: Ack
+```
+
+**Key Features:**
+- **Deduplication:** Keeps seen signatures in memory to avoid reprocessing
+- **Reconnection:** Auto-reconnects on disconnect with exponential backoff
+- **Log Parsing:** Parses program logs to identify event types
+- **Configurable:** Program ID, RPC URL, WS URL, commitment level
+
+**Event Types Parsed:**
+- ConfigInitialized, TokensMinted, TokensBurned
+- AccountFrozen, AccountThawed
+- AddedToBlacklist, RemovedFromBlacklist
+- TokensSeized, PausedChanged
+
+---
+
 ## Architecture Diagram
 
 ```mermaid
@@ -409,3 +629,51 @@ flowchart TB
 3. **Regulatory Readiness:** Built-in features for compliant stablecoins
 4. **Extensibility:** Transfer hooks allow custom compliance without code changes
 5. **Simplicity:** Single authority model, preset-based feature gating
+
+---
+
+## Backend API Reference
+
+The backend provides REST API at `http://localhost:3000`:
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| POST | `/webhook` | Receive events from external systems |
+| POST | `/api/mint` | Create mint request |
+| GET | `/api/mint/:id` | Get mint request by ID |
+| GET | `/api/mint/wallet/:wallet` | Get mint requests by wallet |
+| POST | `/api/burn` | Create burn request |
+| GET | `/api/burn/:id` | Get burn request by ID |
+| GET | `/api/burn/wallet/:wallet` | Get burn requests by wallet |
+| GET | `/api/blacklist/check/:address` | Check if address is blacklisted |
+| GET | `/api/blacklist` | Get all blacklist entries |
+| GET | `/api/events` | Query indexed events |
+| GET | `/api/events/:signature` | Get events by signature |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RPC_URL` | `http://localhost:8899` | Solana RPC URL |
+| `WS_URL` | `ws://localhost:8900` | Solana WebSocket URL |
+| `PROGRAM_ID` | - | SSS program ID |
+| `WEBHOOK_URL` | - | Webhook destination URL |
+| `WEBHOOK_SECRET` | - | Webhook secret header |
+| `WEBHOOK_ENABLED` | `false` | Enable webhook delivery |
+
+### Running the Backend
+
+```bash
+# Development
+RPC_URL=https://api.mainnet-beta.solana.com \
+PROGRAM_ID=YourProgramId \
+WEBHOOK_URL=https://your-endpoint.com/webhook \
+WEBHOOK_ENABLED=true \
+cargo run --manifest-path backend/Cargo.toml
+
+# Or with just
+just backend-run
+```

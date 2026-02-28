@@ -1,0 +1,21 @@
+version: '3.9'
+
+services:
+  backend:
+    build: .
+    container_name: sss-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - RUST_LOG=info
+      - RPC_URL=${RPC_URL:-https://api.devnet.solana.com}
+      - PROGRAM_ID=${PROGRAM_ID}
+      - HELIUS_WEBHOOK_SECRET=${HELIUS_WEBHOOK_SECRET}
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
