@@ -6,6 +6,7 @@ use tokio::sync::RwLock;
 use tracing::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum SanctionsStatus {
     Clear,
     Blocked,
@@ -94,6 +95,7 @@ pub enum AuditAction {
     RuleUpdate,
 }
 
+#[allow(dead_code)]
 pub struct ComplianceService {
     blacklist: Arc<RwLock<HashMap<String, BlacklistEntry>>>,
     rules: Arc<RwLock<Vec<ComplianceRule>>>,

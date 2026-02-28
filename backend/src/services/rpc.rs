@@ -92,4 +92,25 @@ impl RpcClient {
             .cloned()
             .ok_or_else(|| "No result in response".to_string())
     }
+
+    pub async fn get_account_json(&self, pubkey_str: &str) -> Result<Value, String> {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getAccountInfo",
+            "params": [pubkey_str, {"encoding": "jsonParsed"}]
+        });
+
+        let response = self.http_client.post(&self.url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let json: Value = response.json().await.map_err(|e| e.to_string())?;
+        
+        json.get("result")
+            .cloned()
+            .ok_or_else(|| "No result in response".to_string())
+    }
 }

@@ -54,6 +54,7 @@ pub struct BurnEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TransferEvent {
     pub from: String,
     pub to: String,
@@ -62,6 +63,7 @@ pub struct TransferEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct BlacklistEvent {
     pub config: String,
     pub target: String,

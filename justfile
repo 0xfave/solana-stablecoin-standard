@@ -75,6 +75,10 @@ backend-build:
 backend-test:
 	cd backend && cargo test
 
+# Run backend integration tests (requires devnet)
+backend-integration-test:
+	cd backend && cargo test integration_tests
+
 # Run backend in development mode
 backend-run:
     cd backend && cargo run

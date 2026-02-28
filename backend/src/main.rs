@@ -13,6 +13,9 @@ use serde::Deserialize;
 mod routes;
 mod services;
 
+#[cfg(test)]
+mod integration_tests;
+
 use routes::health::health;
 use routes::webhook::webhook;
 use services::rpc::RpcClient;

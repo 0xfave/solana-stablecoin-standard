@@ -174,6 +174,7 @@ impl WebhookService {
     }
 }
 
+#[allow(dead_code)]
 pub struct WebhookManager {
     webhooks: HashMap<String, Arc<tokio::sync::Mutex<WebhookService>>>,
     event_receiver: mpsc::Receiver<OnChainEvent>,
