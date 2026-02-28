@@ -55,7 +55,7 @@ export interface SeizeParams {
 }
 
 const PROGRAM_ID = 'Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6';
-const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXcPzu5ETEA';
+const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
 
 export class SolanaStablecoin {
