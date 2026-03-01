@@ -61,24 +61,32 @@ impl RpcClient {
     }
 
     pub async fn get_token_accounts(&self, mint: &str) -> Result<Value> {
-        let request = serde_json::json!({
+        let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "getTokenAccountsByOwner",
+            "method": "getProgramAccounts",
             "params": [
-                "4CMqGVd2CCeWL4S8QjuJqNJyLGu6WqE8N8h7r7YXoMT",
-                {"mint": mint},
-                {"encoding": "jsonParsed"}
+                "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                {
+                    "encoding": "jsonParsed",
+                    "filters": [
+                        {
+                            "memcmp": {
+                                "offset": 0,
+                                "bytes": mint,
+                                "encoding": "base58"
+                            }
+                        }
+                    ]
+                }
             ]
         });
-
         let response = self.http_client.post(&self.url)
-            .json(&request)
+            .json(&body)
             .send()
             .await?
             .json::<Value>()
             .await?;
-
         Ok(response)
     }
 
