@@ -109,3 +109,15 @@ pub struct TokensTransferred {
     pub amount: u64,
     pub authority: Pubkey,
 }
+
+#[event]
+pub struct MinterAdded {
+    pub config: Pubkey,
+    pub minter: Pubkey,
+}
+
+#[event]
+pub struct MinterRemoved {
+    pub config: Pubkey,
+    pub minter: Pubkey,
+}

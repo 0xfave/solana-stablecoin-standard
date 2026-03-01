@@ -28,7 +28,7 @@ pub mod solana_stablecoin_standard {
         config.decimals = decimals;
         config.bump = ctx.bumps.config;
         config.pending_master_authority = None;
-        config.minter = authority_key;
+        config.minters = vec![authority_key];
         config.freezer = authority_key;
         config.pauser = authority_key;
         config.blacklister = authority_key;
@@ -61,12 +61,37 @@ pub mod solana_stablecoin_standard {
         Ok(())
     }
 
-    pub fn update_minter(ctx: Context<UpdateMinter>, new_minter: Pubkey) -> Result<()> {
+    pub fn add_minter(ctx: Context<UpdateMinter>, new_minter: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
-        let old_minter = config.minter;
-        config.minter = new_minter;
-        emit!(MinterUpdated { config: ctx.accounts.config.key(), old_minter, new_minter });
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            config.master_authority,
+            StablecoinError::Unauthorized
+        );
+        require!(!config.minters.contains(&new_minter), StablecoinError::AlreadyMinter);
+        require!(config.minters.len() < 10, StablecoinError::TooManyMinters);
+        config.minters.push(new_minter);
+        emit!(MinterAdded {
+            config: ctx.accounts.config.key(),
+            minter: new_minter,
+        });
+        Ok(())
+    }
+    
+    pub fn remove_minter(ctx: Context<UpdateMinter>, minter: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            config.master_authority,
+            StablecoinError::Unauthorized
+        );
+        let pos = config.minters.iter().position(|m| *m == minter)
+            .ok_or(StablecoinError::MinterNotFound)?;
+        config.minters.remove(pos);
+        emit!(MinterRemoved {
+            config: ctx.accounts.config.key(),
+            minter,
+        });
         Ok(())
     }
 
@@ -100,7 +125,10 @@ pub mod solana_stablecoin_standard {
 
     pub fn mint(ctx: Context<MintTokens>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(ctx.accounts.minter.key(), config.minter, StablecoinError::UnauthorizedMinter);
+        require!(
+            config.minters.contains(&ctx.accounts.minter.key()),
+            StablecoinError::UnauthorizedMinter
+        );
         require!(!config.paused, StablecoinError::MintPaused);
         if let Some(cap) = config.supply_cap {
             require!(ctx.accounts.mint.supply + amount <= cap, StablecoinError::Overflow);
@@ -127,7 +155,10 @@ pub mod solana_stablecoin_standard {
 
     pub fn burn(ctx: Context<Burn>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require_keys_eq!(ctx.accounts.burner.key(), config.minter, StablecoinError::UnauthorizedMinter);
+        require!(
+            config.minters.contains(&ctx.accounts.burner.key()),
+            StablecoinError::UnauthorizedMinter
+        );
         anchor_spl::token_interface::burn(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -152,7 +183,10 @@ pub mod solana_stablecoin_standard {
         let config = &ctx.accounts.config;
 
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(ctx.accounts.seizer.key(), config.minter, StablecoinError::UnauthorizedSeizer);
+        require!(
+            config.minters.contains(&ctx.accounts.seizer.key()),
+            StablecoinError::UnauthorizedSeizer
+        );
 
         let source_blacklist_key = ctx.accounts.source_blacklist.key();
         let (expected_blacklist, _) = Pubkey::find_program_address(

@@ -40,4 +40,10 @@ pub enum StablecoinError {
     InvalidBlacklistAccount,
     #[msg("Transfer hook must be set in compliant mode")]
     TransferHookRequired,
+    #[msg("Address is already a minter")]
+    AlreadyMinter,
+    #[msg("Minter not found")]
+    MinterNotFound,
+    #[msg("Too many minters (max 10)")]
+    TooManyMinters,
 }

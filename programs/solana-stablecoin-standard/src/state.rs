@@ -12,7 +12,8 @@ pub struct StablecoinConfig {
     pub decimals: u8,
     pub bump: u8,
     pub pending_master_authority: Option<Pubkey>,
-    pub minter: Pubkey,
+    #[max_len(10)]
+    pub minters: Vec<Pubkey>,
     pub freezer: Pubkey,
     pub pauser: Pubkey,
     pub blacklister: Pubkey,

@@ -642,6 +642,64 @@ mod tests {
         }
     }
 
+    fn add_minter(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        new_minter: &Pubkey,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("add_minter");
+        let mut data = serialize_with_discriminator(&discriminator, new_minter.as_ref());
+
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn remove_minter(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        minter: &Pubkey,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("remove_minter");
+        let mut data = serialize_with_discriminator(&discriminator, minter.as_ref());
+
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
     fn update_minter(
         svm: &mut LiteSVM,
         payer: &Keypair,
@@ -957,8 +1015,8 @@ mod tests {
 
         // Update minter to a new address
         let new_minter = Keypair::new();
-        let result = update_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey());
-        assert!(result.is_ok(), "update_minter should succeed when called by master_authority");
+        let result = add_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey());
+        assert!(result.is_ok(), "add_minter should succeed when called by master_authority");
 
         // Verify the config has the new minter
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
@@ -966,7 +1024,7 @@ mod tests {
         let config_data =
             solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref())
                 .unwrap();
-        assert_eq!(config_data.minter, new_minter.pubkey());
+        assert!(config_data.minters.contains(&new_minter.pubkey()));
     }
 
     #[test]
@@ -982,13 +1040,181 @@ mod tests {
         // Initialize
         let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
 
-        // Try to update minter with non-owner - should fail
+        // Try to add minter with non-owner - should fail
         let non_owner = Keypair::new();
         svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
 
         let new_minter = Keypair::new();
-        let result = update_minter(svm, payer, &non_owner, &mint.pubkey(), &new_minter.pubkey());
-        assert!(result.is_err(), "update_minter should fail when called by non-owner");
+        let result = add_minter(svm, payer, &non_owner, &mint.pubkey(), &new_minter.pubkey());
+        assert!(result.is_err(), "add_minter should fail when called by non-owner");
+    }
+
+    #[test]
+    fn test_add_minter_fails_if_already_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let new_minter = Keypair::new();
+        add_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey()).unwrap();
+
+        let result = add_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey());
+        assert!(result.is_err(), "add_minter should fail if address is already a minter");
+    }
+
+    #[test]
+    fn test_add_minter_fails_when_at_max_capacity() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        // Authority is already minter (1), add 9 more to hit max of 10
+        for _ in 0..9 {
+            let m = Keypair::new();
+            add_minter(svm, payer, mint_authority, &mint.pubkey(), &m.pubkey()).unwrap();
+        }
+
+        let config_data = get_config(svm, &mint.pubkey());
+        assert_eq!(config_data.minters.len(), 10);
+
+        // Adding an 11th should fail
+        let overflow_minter = Keypair::new();
+        let result = add_minter(svm, payer, mint_authority, &mint.pubkey(), &overflow_minter.pubkey());
+        assert!(result.is_err(), "add_minter should fail when at max capacity (10)");
+    }
+
+    #[test]
+    fn test_remove_minter_succeeds_by_master_authority() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let new_minter = Keypair::new();
+        add_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey()).unwrap();
+
+        let config_data = get_config(svm, &mint.pubkey());
+        assert_eq!(config_data.minters.len(), 2);
+
+        let result = remove_minter(svm, payer, mint_authority, &mint.pubkey(), &new_minter.pubkey());
+        assert!(result.is_ok(), "remove_minter should succeed when called by master_authority");
+
+        let config_data = get_config(svm, &mint.pubkey());
+        assert!(!config_data.minters.contains(&new_minter.pubkey()), "removed minter should not be in list");
+        assert_eq!(config_data.minters.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_minter_fails_by_non_owner() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let non_owner = Keypair::new();
+        svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = remove_minter(svm, payer, &non_owner, &mint.pubkey(), &mint_authority.pubkey());
+        assert!(result.is_err(), "remove_minter should fail when called by non-owner");
+    }
+
+    #[test]
+    fn test_remove_minter_fails_if_not_a_minter() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let random_key = Keypair::new();
+        let result = remove_minter(svm, payer, mint_authority, &mint.pubkey(), &random_key.pubkey());
+        assert!(result.is_err(), "remove_minter should fail if address is not a minter");
+    }
+
+    #[test]
+    fn test_multiple_minters_can_all_mint() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let minter2 = Keypair::new();
+        let minter3 = Keypair::new();
+        svm.airdrop(&minter2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&minter3.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter2.pubkey()).unwrap();
+        add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter3.pubkey()).unwrap();
+
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // All three minters should be able to mint
+        assert!(
+            program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 100).is_ok(),
+            "original authority should still be able to mint"
+        );
+        assert!(
+            program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account, 100).is_ok(),
+            "minter2 should be able to mint"
+        );
+        assert!(
+            program_mint(svm, payer, &minter3, &mint.pubkey(), &token_account, 100).is_ok(),
+            "minter3 should be able to mint"
+        );
+    }
+
+    #[test]
+    fn test_removed_minter_cannot_mint() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), 0, Some(1_000_000_000_000), 6);
+
+        let minter2 = Keypair::new();
+        svm.airdrop(&minter2.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter2.pubkey()).unwrap();
+
+        let token_account = create_token_account(svm, payer, &mint.pubkey());
+
+        // Can mint before removal
+        assert!(program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account, 100).is_ok());
+
+        // Remove minter2
+        remove_minter(svm, payer, mint_authority, &mint.pubkey(), &minter2.pubkey()).unwrap();
+
+        // Cannot mint after removal
+        let result = program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account, 100);
+        assert!(result.is_err(), "removed minter should not be able to mint");
     }
 
     #[test]
@@ -1678,6 +1904,12 @@ mod tests {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("{:?}", e)),
         }
+    }
+
+    fn get_config(svm: &LiteSVM, mint: &Pubkey) -> solana_stablecoin_standard::state::StablecoinConfig {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+        let account = svm.get_account(&config_pda).unwrap();
+        solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut account.data.as_ref()).unwrap()
     }
 
     #[test]
