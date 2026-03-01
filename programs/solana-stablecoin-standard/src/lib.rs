@@ -1,5 +1,4 @@
-use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke;
+use anchor_lang::{prelude::*, solana_program::program::invoke};
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 declare_id!("Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6");
@@ -10,8 +9,7 @@ pub mod error;
 pub mod event;
 pub mod state;
 
-use crate::error::*;
-use crate::event::*;
+use crate::{error::*, event::*};
 
 #[program]
 pub mod solana_stablecoin_standard {
@@ -152,24 +150,24 @@ pub mod solana_stablecoin_standard {
 
     pub fn seize(ctx: Context<Seize>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        
+
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
         require_keys_eq!(ctx.accounts.seizer.key(), config.minter, StablecoinError::UnauthorizedSeizer);
-        
+
         let source_blacklist_key = ctx.accounts.source_blacklist.key();
         let (expected_blacklist, _) = Pubkey::find_program_address(
             &[b"blacklist", config.key().as_ref(), ctx.accounts.source.owner.as_ref()],
             &ID,
         );
         require_keys_eq!(source_blacklist_key, expected_blacklist, StablecoinError::InvalidBlacklistAccount);
-        
+
         if ctx.accounts.source_blacklist.data_len() == 0 {
             return Err(StablecoinError::NotBlacklisted.into());
         }
-        
+
         let mint_key = ctx.accounts.mint.key();
         let decimals = ctx.accounts.mint.decimals;
-        
+
         let transfer_ix = spl_token_2022::instruction::transfer_checked(
             &ctx.accounts.token_program.key(),
             &ctx.accounts.source.key(),
@@ -180,7 +178,7 @@ pub mod solana_stablecoin_standard {
             amount,
             decimals,
         )?;
-        
+
         invoke(
             &transfer_ix,
             &[
@@ -191,7 +189,7 @@ pub mod solana_stablecoin_standard {
                 ctx.accounts.token_program.to_account_info(),
             ],
         )?;
-        
+
         emit!(TokensSeized {
             mint: mint_key,
             from: ctx.accounts.source.key(),
@@ -199,7 +197,7 @@ pub mod solana_stablecoin_standard {
             amount,
             seizer: ctx.accounts.seizer.key(),
         });
-        
+
         Ok(())
     }
 
@@ -281,38 +279,29 @@ pub mod solana_stablecoin_standard {
 
     pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        
+
         if config.preset == 1 {
-            require!(
-                config.transfer_hook_program.is_some(),
-                StablecoinError::TransferHookRequired
-            );
+            require!(config.transfer_hook_program.is_some(), StablecoinError::TransferHookRequired);
         }
-        
+
         require!(!config.paused, StablecoinError::TransfersPaused);
-        
+
         let sender_key = ctx.accounts.from.owner;
-        let (expected_sender_blacklist, _) = Pubkey::find_program_address(
-            &[b"blacklist", config.key().as_ref(), sender_key.as_ref()],
-            &ID,
-        );
+        let (expected_sender_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config.key().as_ref(), sender_key.as_ref()], &ID);
         let sender_blacklist_key = ctx.accounts.sender_blacklist.key();
-        if sender_blacklist_key == expected_sender_blacklist 
-            && *ctx.accounts.sender_blacklist.owner == ID {
+        if sender_blacklist_key == expected_sender_blacklist && *ctx.accounts.sender_blacklist.owner == ID {
             return Err(StablecoinError::SenderBlacklisted.into());
         }
-        
+
         let receiver_key = ctx.accounts.to.owner;
-        let (expected_receiver_blacklist, _) = Pubkey::find_program_address(
-            &[b"blacklist", config.key().as_ref(), receiver_key.as_ref()],
-            &ID,
-        );
+        let (expected_receiver_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config.key().as_ref(), receiver_key.as_ref()], &ID);
         let receiver_blacklist_key = ctx.accounts.receiver_blacklist.key();
-        if receiver_blacklist_key == expected_receiver_blacklist 
-            && *ctx.accounts.receiver_blacklist.owner == ID {
+        if receiver_blacklist_key == expected_receiver_blacklist && *ctx.accounts.receiver_blacklist.owner == ID {
             return Err(StablecoinError::ReceiverBlacklisted.into());
         }
-        
+
         anchor_spl::token_interface::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -324,7 +313,7 @@ pub mod solana_stablecoin_standard {
             ),
             amount,
         )?;
-        
+
         emit!(TokensTransferred {
             from: ctx.accounts.from.key(),
             to: ctx.accounts.to.key(),

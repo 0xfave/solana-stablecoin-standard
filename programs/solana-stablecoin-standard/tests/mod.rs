@@ -2,7 +2,7 @@
 mod tests {
     use anchor_lang::{
         prelude::AccountMeta,
-        solana_program::{native_token::LAMPORTS_PER_SOL, pubkey::Pubkey, system_instruction, hash::hash},
+        solana_program::{hash::hash, native_token::LAMPORTS_PER_SOL, pubkey::Pubkey, system_instruction},
         system_program::ID as SYSTEM_PROGRAM_ID,
         AccountDeserialize, AnchorSerialize,
     };
@@ -16,8 +16,7 @@ mod tests {
     use solana_signer::Signer;
     use solana_transaction::Transaction;
     use spl_token_2022::ID as TOKEN_2022_ID;
-    use std::path::PathBuf;
-    use std::str::FromStr;
+    use std::{path::PathBuf, str::FromStr};
 
     use solana_stablecoin_standard::ID as PROGRAM_ID;
     const SSS_PROGRAM_ID: Pubkey = sss_compliance_hook::ID;
@@ -101,9 +100,10 @@ mod tests {
         let token_program = TOKEN_2022_ID;
 
         // Calculate mint space with permanent delegate extension
-        let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(
-            &[spl_token_2022::extension::ExtensionType::PermanentDelegate],
-        ).unwrap();
+        let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<
+            spl_token_2022::state::Mint,
+        >(&[spl_token_2022::extension::ExtensionType::PermanentDelegate])
+        .unwrap();
         let lamports = svm.minimum_balance_for_rent_exemption(mint_space);
 
         let create_mint_ix = system_instruction::create_account(
@@ -115,11 +115,9 @@ mod tests {
         );
 
         // Add permanent delegate extension
-        let initialize_extension_ix = spl_token_2022::instruction::initialize_permanent_delegate(
-            &token_program,
-            &mint.pubkey(),
-            mint_authority,
-        ).unwrap();
+        let initialize_extension_ix =
+            spl_token_2022::instruction::initialize_permanent_delegate(&token_program, &mint.pubkey(), mint_authority)
+                .unwrap();
 
         // Initialize mint (must come after extension)
         let initialize_mint_ix = spl_token_2022::instruction::initialize_mint2(
@@ -656,10 +654,7 @@ mod tests {
         let discriminator = compute_instruction_discriminator("update_minter");
         let mut data = serialize_with_discriminator(&discriminator, new_minter.as_ref());
 
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),
-        ];
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
 
         let blockhash = svm.latest_blockhash();
 
@@ -688,10 +683,7 @@ mod tests {
         let discriminator = compute_instruction_discriminator("update_freezer");
         let mut data = serialize_with_discriminator(&discriminator, new_freezer.as_ref());
 
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),
-        ];
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
 
         let blockhash = svm.latest_blockhash();
 
@@ -720,10 +712,7 @@ mod tests {
         let discriminator = compute_instruction_discriminator("update_pauser");
         let mut data = serialize_with_discriminator(&discriminator, new_pauser.as_ref());
 
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),
-        ];
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
 
         let blockhash = svm.latest_blockhash();
 
@@ -752,10 +741,7 @@ mod tests {
         let discriminator = compute_instruction_discriminator("update_blacklister");
         let mut data = serialize_with_discriminator(&discriminator, new_blacklister.as_ref());
 
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),
-        ];
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
 
         let blockhash = svm.latest_blockhash();
 
@@ -781,7 +767,8 @@ mod tests {
         reason: String,
     ) -> Result<(), String> {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (blacklist_entry, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
+        let (blacklist_entry, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
 
         let discriminator = compute_instruction_discriminator("blacklist_add");
         let reason_bytes = reason.try_to_vec().unwrap();
@@ -818,7 +805,8 @@ mod tests {
         target: &Pubkey,
     ) -> Result<(), String> {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (blacklist_entry, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
+        let (blacklist_entry, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), target.as_ref()], &PROGRAM_ID);
 
         let discriminator = compute_instruction_discriminator("blacklist_remove");
         let data = serialize_with_discriminator(&discriminator, &[]);
@@ -975,7 +963,9 @@ mod tests {
         // Verify the config has the new minter
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
         let config_account = svm.get_account(&config_pda).unwrap();
-        let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref()).unwrap();
+        let config_data =
+            solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref())
+                .unwrap();
         assert_eq!(config_data.minter, new_minter.pubkey());
     }
 
@@ -1022,7 +1012,9 @@ mod tests {
         // Verify the config has the new freezer
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
         let config_account = svm.get_account(&config_pda).unwrap();
-        let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref()).unwrap();
+        let config_data =
+            solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref())
+                .unwrap();
         assert_eq!(config_data.freezer, new_freezer.pubkey());
     }
 
@@ -1069,7 +1061,9 @@ mod tests {
         // Verify the config has the new pauser
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
         let config_account = svm.get_account(&config_pda).unwrap();
-        let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref()).unwrap();
+        let config_data =
+            solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref())
+                .unwrap();
         assert_eq!(config_data.pauser, new_pauser.pubkey());
     }
 
@@ -1116,7 +1110,9 @@ mod tests {
         // Verify the config has the new blacklister
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
         let config_account = svm.get_account(&config_pda).unwrap();
-        let config_data = solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref()).unwrap();
+        let config_data =
+            solana_stablecoin_standard::state::StablecoinConfig::try_deserialize(&mut config_account.data.as_ref())
+                .unwrap();
         assert_eq!(config_data.blacklister, new_blacklister.pubkey());
     }
 
@@ -1365,7 +1361,8 @@ mod tests {
         amount: u64,
     ) -> Result<(), String> {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (source_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), source_owner.as_ref()], &PROGRAM_ID);
+        let (source_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), source_owner.as_ref()], &PROGRAM_ID);
         let token_program = TOKEN_2022_ID;
 
         let discriminator = compute_instruction_discriminator("seize");
@@ -1415,10 +1412,10 @@ mod tests {
         let destination = Keypair::new();
         svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
-        
+
         // Mint tokens to victim
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
 
@@ -1426,7 +1423,16 @@ mod tests {
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
 
         // Seize tokens - minter has permanent_delegate extension so can transfer from any account
-        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        let result = seize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
+        );
         assert!(result.is_ok(), "seize should succeed when called by minter (permanent delegate)");
     }
 
@@ -1450,10 +1456,10 @@ mod tests {
         svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&non_seizer.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
-        
+
         // Mint tokens to victim
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
 
@@ -1461,7 +1467,16 @@ mod tests {
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
 
         // Try to seize with non-minter - should fail
-        let result = seize(svm, payer, &non_seizer, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        let result = seize(
+            svm,
+            payer,
+            &non_seizer,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "seize should fail when called by non-minter");
     }
 
@@ -1483,15 +1498,24 @@ mod tests {
         let destination = Keypair::new();
         svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
-        
+
         // Mint tokens to victim (but DON'T blacklist)
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
 
         // Try to seize - should fail (not blacklisted)
-        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        let result = seize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "seize should fail if source not blacklisted");
     }
 
@@ -1513,15 +1537,24 @@ mod tests {
         let destination = Keypair::new();
         svm.airdrop(&victim.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&destination.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let victim_token_account = create_token_account_for_owner(svm, payer, &victim, &mint.pubkey());
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
-        
+
         // Mint tokens to victim
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
 
         // Try to seize in SSS-1 - should fail
-        let result = seize(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, &destination_token_account, &victim.pubkey(), 500);
+        let result = seize(
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "seize should fail in SSS-1");
     }
 
@@ -1540,7 +1573,8 @@ mod tests {
 
         // Add to blacklist - should succeed (master_authority is blacklister by default)
         let target = Keypair::new();
-        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        let result =
+            blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
         assert!(result.is_ok(), "blacklist_add should succeed when called by blacklister");
     }
 
@@ -1559,11 +1593,13 @@ mod tests {
 
         // Add to blacklist - should succeed first time
         let target = Keypair::new();
-        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        let result =
+            blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
         assert!(result.is_ok(), "blacklist_add should succeed first time");
 
         // Try to add again - should fail
-        let result = blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
+        let result =
+            blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
         assert!(result.is_err(), "blacklist_add should fail if already blacklisted");
     }
 
@@ -1579,8 +1615,10 @@ mod tests {
         amount: u64,
     ) -> Result<(), String> {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (sender_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), from_owner.as_ref()], &PROGRAM_ID);
-        let (receiver_blacklist, _) = Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), to_owner.as_ref()], &PROGRAM_ID);
+        let (sender_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), from_owner.as_ref()], &PROGRAM_ID);
+        let (receiver_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), to_owner.as_ref()], &PROGRAM_ID);
         let token_program = TOKEN_2022_ID;
 
         let discriminator = compute_instruction_discriminator("transfer");
@@ -1625,10 +1663,7 @@ mod tests {
         let args = new_hook_program.try_to_vec().unwrap();
         let mut data = serialize_with_discriminator(&discriminator, &args);
 
-        let accounts = vec![
-            AccountMeta::new(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),
-        ];
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
 
         let blockhash = svm.latest_blockhash();
 
@@ -1663,15 +1698,25 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
         // Transfer - should succeed (SSS-1 with no hook required)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_ok(), "transfer should succeed when hook is None (SSS-1)");
     }
 
@@ -1693,15 +1738,25 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
         // Transfer - should fail (hook not set in SSS-2)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "transfer should fail when hook not set in SSS-2");
     }
 
@@ -1726,15 +1781,25 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
         // Transfer - should succeed (not blacklisted)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_ok(), "transfer should succeed when sender/receiver not blacklisted");
     }
 
@@ -1759,10 +1824,10 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
@@ -1770,7 +1835,17 @@ mod tests {
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user1.pubkey(), "Test reason".to_string()).unwrap();
 
         // Transfer - should fail (sender blacklisted)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "transfer should fail when sender is blacklisted");
     }
 
@@ -1795,10 +1870,10 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
@@ -1806,7 +1881,17 @@ mod tests {
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user2.pubkey(), "Test reason".to_string()).unwrap();
 
         // Transfer - should fail (receiver blacklisted)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "transfer should fail when receiver is blacklisted");
     }
 
@@ -1828,10 +1913,10 @@ mod tests {
         let user2 = Keypair::new();
         svm.airdrop(&user1.pubkey(), LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&user2.pubkey(), LAMPORTS_PER_SOL).unwrap();
-        
+
         let token_account1 = create_token_account_for_owner(svm, payer, &user1, &mint.pubkey());
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
-        
+
         // Mint tokens to user1
         mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
 
@@ -1839,7 +1924,17 @@ mod tests {
         update_paused(svm, payer, mint_authority, &mint.pubkey(), true).unwrap();
 
         // Transfer - should fail (paused)
-        let result = transfer(svm, payer, &user1, &mint.pubkey(), &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500);
+        let result = transfer(
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
+        );
         assert!(result.is_err(), "transfer should fail when paused");
     }
 

@@ -106,6 +106,78 @@ sdk-test:
 # SDK: all (install + build)
 sdk: sdk-build
 
+# ---------------------------------------------------------------------------- #
+#                                CLI COMMANDS                                   #
+# ---------------------------------------------------------------------------- #
+
+# Build CLI
+cli-build:
+	cd cli && RUSTFLAGS="-A dead_code" cargo build --release
+
+# Run CLI with arguments
+cli *args:
+	cd cli && cargo run --release -- {{args}}
+
+# Initialize stablecoin with preset
+cli-init preset:
+	cd cli && cargo run --release -- init --preset {{preset}}
+
+# CLI status
+cli-status:
+	cd cli && cargo run --release -- status
+
+# CLI supply
+cli-supply:
+	cd cli && cargo run --release -- supply
+
+# CLI mint tokens
+cli-mint recipient amount:
+	cd cli && cargo run --release -- mint {{recipient}} {{amount}}
+
+# CLI burn tokens
+cli-burn amount:
+	cd cli && cargo run --release -- burn {{amount}}
+
+# CLI freeze account
+cli-freeze address:
+	cd cli && cargo run --release -- freeze {{address}}
+
+# CLI thaw account
+cli-thaw address:
+	cd cli && cargo run --release -- thaw {{address}}
+
+# CLI pause/unpause
+cli-pause:
+	cd cli && cargo run --release -- pause
+
+cli-unpause:
+	cd cli && cargo run --release -- unpause
+
+# CLI blacklist
+cli-blacklist-add address:
+	cd cli && cargo run --release -- blacklist add {{address}}
+
+cli-blacklist-remove address:
+	cd cli && cargo run --release -- blacklist remove {{address}}
+
+# CLI seize
+cli-seize address to amount:
+	cd cli && cargo run --release -- seize {{address}} --to {{to}} {{amount}}
+
+# CLI minters
+cli-minters-list:
+	cd cli && cargo run --release -- minters list
+
+cli-minters-add address:
+	cd cli && cargo run --release -- minters add {{address}}
+
+cli-minters-remove address:
+	cd cli && cargo run --release -- minters remove {{address}}
+
+# CLI holders
+cli-holders:
+	cd cli && cargo run --release -- holders
+
 # Full stack: build programs + build backend
 full-stack: build-all backend-build
 alias fs := full-stack

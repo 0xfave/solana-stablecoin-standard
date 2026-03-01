@@ -46,8 +46,8 @@ pub mod sss_compliance_hook {
         .map(|(key, _)| key);
 
         if let Some(blacklist_key) = source_blacklist_key {
-            if *ctx.accounts.source_blacklist_check.key == blacklist_key
-                && ctx.accounts.source_blacklist_check.data_len() > 0
+            if *ctx.accounts.source_blacklist_check.key == blacklist_key &&
+                ctx.accounts.source_blacklist_check.data_len() > 0
             {
                 return Err(ComplianceError::SenderBlacklisted.into());
             }
@@ -60,8 +60,8 @@ pub mod sss_compliance_hook {
         .map(|(key, _)| key);
 
         if let Some(blacklist_key) = dest_blacklist_key {
-            if *ctx.accounts.destination_blacklist_check.key == blacklist_key
-                && ctx.accounts.destination_blacklist_check.data_len() > 0
+            if *ctx.accounts.destination_blacklist_check.key == blacklist_key &&
+                ctx.accounts.destination_blacklist_check.data_len() > 0
             {
                 return Err(ComplianceError::ReceiverBlacklisted.into());
             }
