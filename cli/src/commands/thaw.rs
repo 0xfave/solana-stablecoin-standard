@@ -8,6 +8,21 @@ use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
 
+const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+fn derive_ata(wallet: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+    let associated_token_program = Pubkey::from_str(ASSOCIATED_TOKEN_PROGRAM).unwrap();
+    Pubkey::find_program_address(
+        &[
+            wallet.as_ref(),
+            token_program.as_ref(),
+            mint.as_ref(),
+        ],
+        &associated_token_program,
+    )
+    .0
+}
+
 pub async fn execute(
     rpc: &RpcClient,
     keypair: &Keypair,
@@ -18,30 +33,44 @@ pub async fn execute(
 
     let program_id = Pubkey::from_str(&signer::get_program_id())?;
     let token_2022 = Pubkey::from_str(&signer::get_token_2022_program_id())?;
-    let account = Pubkey::from_str(address)?;
+    let wallet_pubkey = Pubkey::from_str(address)?;
     let authority = keypair.pubkey();
 
     let mint_str = mint.ok_or_else(|| {
         anyhow::anyhow!("Mint address required. Use --mint flag or set in config.toml")
     })?;
-    let mint = Pubkey::from_str(&mint_str)?;
+    let mint_pubkey = Pubkey::from_str(&mint_str)?;
+
+    // Derive config PDA
+    let (config, _) = Pubkey::find_program_address(
+        &[b"stablecoin", &mint_pubkey.to_bytes()],
+        &program_id,
+    );
+
+    // Derive the wallet's ATA — thaw operates on the token account, not the wallet
+    let ata = derive_ata(&wallet_pubkey, &mint_pubkey, &token_2022);
+    println!("Thawing ATA: {}", ata);
+
+    // Discriminator from IDL: thaw_account = [115, 152, 79, 213, 213, 169, 184, 35]
+    let discriminator: [u8; 8] = [115, 152, 79, 213, 213, 169, 184, 35];
 
     let ix = Instruction::new_with_bytes(
         program_id,
-        &[5u8],
+        &discriminator,
         vec![
-            AccountMeta::new_readonly(mint, false),
-            AccountMeta::new(account, false),
-            AccountMeta::new_readonly(authority, true),
-            AccountMeta::new_readonly(token_2022, false),
+            AccountMeta::new_readonly(config, false),      // config
+            AccountMeta::new_readonly(mint_pubkey, false), // mint
+            AccountMeta::new(ata, false),                  // account (writable)
+            AccountMeta::new_readonly(authority, true),    // freezer (signer)
+            AccountMeta::new_readonly(token_2022, false),  // token_program
         ],
     );
 
     let tx = Transaction::new_with_payer(&[ix], Some(&authority));
-
     let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
     println!("Thawed account: {}", address);
+    println!("ATA: {}", ata);
     println!("Signature: {}", signature);
     println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
 
