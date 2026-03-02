@@ -1878,6 +1878,7 @@ mod tests {
             AccountMeta::new(config_pda, false),
             AccountMeta::new_readonly(sender_blacklist, false),
             AccountMeta::new_readonly(receiver_blacklist, false),
+            AccountMeta::new_readonly(*mint, false),
             AccountMeta::new(*from, false),
             AccountMeta::new(*to, false),
             AccountMeta::new(authority.pubkey(), true),

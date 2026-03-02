@@ -121,3 +121,13 @@ pub struct MinterRemoved {
     pub config: Pubkey,
     pub minter: Pubkey,
 }
+
+#[event]
+pub struct MasterAuthorityProposed {
+    pub new_authority: Pubkey,
+}
+
+#[event]
+pub struct MasterAuthorityAccepted {
+    pub new_authority: Pubkey,
+}

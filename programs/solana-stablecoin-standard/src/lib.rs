@@ -34,11 +34,12 @@ pub mod solana_stablecoin_standard {
         config.freezer = authority_key;
         config.pauser = authority_key;
         config.blacklister = authority_key;
-
+    
         let config_key = ctx.accounts.config.key();
         let mint_key = ctx.accounts.mint.key();
-
-        let set_authority_ix = spl_token_2022::instruction::set_authority(
+    
+        // Transfer mint authority to config PDA
+        let set_mint_authority_ix = spl_token_2022::instruction::set_authority(
             &ctx.accounts.token_program.key(),
             &mint_key,
             Some(&config_key),
@@ -46,23 +47,40 @@ pub mod solana_stablecoin_standard {
             &authority_key,
             &[],
         )?;
-
         invoke(
-            &set_authority_ix,
+            &set_mint_authority_ix,
             &[
                 ctx.accounts.token_program.to_account_info(),
                 ctx.accounts.mint.to_account_info(),
                 ctx.accounts.authority.to_account_info(),
             ],
         )?;
-
+    
+        // Transfer freeze authority to config PDA
+        let set_freeze_authority_ix = spl_token_2022::instruction::set_authority(
+            &ctx.accounts.token_program.key(),
+            &mint_key,
+            Some(&config_key),
+            spl_token_2022::instruction::AuthorityType::FreezeAccount,
+            &authority_key,
+            &[],
+        )?;
+        invoke(
+            &set_freeze_authority_ix,
+            &[
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.authority.to_account_info(),
+            ],
+        )?;
+    
         emit!(ConfigInitialized {
             config: ctx.accounts.config.key(),
             authority: authority_key,
             mint: mint_key,
             preset,
         });
-
+    
         Ok(())
     }
 
@@ -135,8 +153,9 @@ pub mod solana_stablecoin_standard {
         let config = &ctx.accounts.config;
         require!(config.minters.contains(&ctx.accounts.minter.key()), StablecoinError::UnauthorizedMinter);
         require!(!config.paused, StablecoinError::MintPaused);
+        let new_supply = ctx.accounts.mint.supply.checked_add(amount).ok_or(StablecoinError::Overflow)?;
         if let Some(cap) = config.supply_cap {
-            require!(ctx.accounts.mint.supply + amount <= cap, StablecoinError::Overflow);
+            require!(new_supply <= cap, StablecoinError::Overflow);
         }
 
         let mint_key = ctx.accounts.mint.key();
@@ -166,6 +185,7 @@ pub mod solana_stablecoin_standard {
 
     pub fn burn(ctx: Context<Burn>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
+        require!(!config.paused, StablecoinError::BurnPaused);
         require!(config.minters.contains(&ctx.accounts.burner.key()), StablecoinError::UnauthorizedMinter);
 
         let mint_key = ctx.accounts.mint.key();
@@ -205,10 +225,6 @@ pub mod solana_stablecoin_standard {
             &ID,
         );
         require_keys_eq!(source_blacklist_key, expected_blacklist, StablecoinError::InvalidBlacklistAccount);
-
-        if ctx.accounts.source_blacklist.data_len() == 0 {
-            return Err(StablecoinError::NotBlacklisted.into());
-        }
 
         let mint_key = ctx.accounts.mint.key();
         let decimals = ctx.accounts.mint.decimals;
@@ -252,14 +268,23 @@ pub mod solana_stablecoin_standard {
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
         require_keys_eq!(ctx.accounts.freezer.key(), config.freezer, StablecoinError::UnauthorizedFreezer);
-        anchor_spl::token_interface::freeze_account(CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            anchor_spl::token_interface::FreezeAccount {
-                account: ctx.accounts.account.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
-                authority: ctx.accounts.freezer.to_account_info(),
-            },
-        ))?;
+    
+        let mint_key = ctx.accounts.mint.key();
+        let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
+        let signer_seeds = &[&seeds[..]];
+    
+        anchor_spl::token_interface::freeze_account(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token_interface::FreezeAccount {
+                    account: ctx.accounts.account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer_seeds,
+            )
+        )?;
+    
         emit!(AccountFrozen {
             account: ctx.accounts.account.key(),
             mint: ctx.accounts.mint.key(),
@@ -267,18 +292,27 @@ pub mod solana_stablecoin_standard {
         });
         Ok(())
     }
-
+    
     pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
         require_keys_eq!(ctx.accounts.freezer.key(), config.freezer, StablecoinError::UnauthorizedFreezer);
-        anchor_spl::token_interface::thaw_account(CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            anchor_spl::token_interface::ThawAccount {
-                account: ctx.accounts.account.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
-                authority: ctx.accounts.freezer.to_account_info(),
-            },
-        ))?;
+    
+        let mint_key = ctx.accounts.mint.key();
+        let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
+        let signer_seeds = &[&seeds[..]];
+    
+        anchor_spl::token_interface::thaw_account(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token_interface::ThawAccount {
+                    account: ctx.accounts.account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
+                },
+                signer_seeds,
+            )
+        )?;
+    
         emit!(AccountThawed {
             account: ctx.accounts.account.key(),
             mint: ctx.accounts.mint.key(),
@@ -290,11 +324,7 @@ pub mod solana_stablecoin_standard {
     pub fn blacklist_add(ctx: Context<BlacklistAdd>, reason: String) -> Result<()> {
         let config = &ctx.accounts.config;
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require_keys_eq!(
-            ctx.accounts.blacklister.key(),
-            config.master_authority,
-            StablecoinError::UnauthorizedBlacklister
-        );
+        require_keys_eq!(ctx.accounts.blacklister.key(), config.blacklister, StablecoinError::UnauthorizedBlacklister);
         require!(ctx.accounts.target.key() != Pubkey::default(), StablecoinError::BlacklistZeroAddress);
         let entry = &mut ctx.accounts.blacklist_entry;
         entry.blacklister = ctx.accounts.blacklister.key();
@@ -328,38 +358,31 @@ pub mod solana_stablecoin_standard {
     pub fn transfer(ctx: Context<Transfer>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
 
+        if ctx.accounts.sender_blacklist.data_len() > 0 {
+            return Err(StablecoinError::SenderBlacklisted.into());
+        }
+        if ctx.accounts.receiver_blacklist.data_len() > 0 {
+            return Err(StablecoinError::ReceiverBlacklisted.into());
+        }
+
         if config.preset == 1 {
             require!(config.transfer_hook_program.is_some(), StablecoinError::TransferHookRequired);
         }
 
         require!(!config.paused, StablecoinError::TransfersPaused);
 
-        let sender_key = ctx.accounts.from.owner;
-        let (expected_sender_blacklist, _) =
-            Pubkey::find_program_address(&[b"blacklist", config.key().as_ref(), sender_key.as_ref()], &ID);
-        let sender_blacklist_key = ctx.accounts.sender_blacklist.key();
-        if sender_blacklist_key == expected_sender_blacklist && *ctx.accounts.sender_blacklist.owner == ID {
-            return Err(StablecoinError::SenderBlacklisted.into());
-        }
-
-        let receiver_key = ctx.accounts.to.owner;
-        let (expected_receiver_blacklist, _) =
-            Pubkey::find_program_address(&[b"blacklist", config.key().as_ref(), receiver_key.as_ref()], &ID);
-        let receiver_blacklist_key = ctx.accounts.receiver_blacklist.key();
-        if receiver_blacklist_key == expected_receiver_blacklist && *ctx.accounts.receiver_blacklist.owner == ID {
-            return Err(StablecoinError::ReceiverBlacklisted.into());
-        }
-
-        anchor_spl::token_interface::transfer(
+        anchor_spl::token_interface::transfer_checked(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token_interface::Transfer {
+                anchor_spl::token_interface::TransferChecked {
                     from: ctx.accounts.from.to_account_info(),
                     to: ctx.accounts.to.to_account_info(),
                     authority: ctx.accounts.authority.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
                 },
             ),
             amount,
+            ctx.accounts.mint.decimals,
         )?;
 
         emit!(TokensTransferred {
@@ -376,6 +399,26 @@ pub mod solana_stablecoin_standard {
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
         require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
         msg!("ExtraAccountMetaList initialized for mint: {}", ctx.accounts.mint.key());
+        Ok(())
+    }
+    
+    pub fn propose_master_authority(ctx: Context<ProposeMasterAuthority>, new_authority: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
+        config.pending_master_authority = Some(new_authority);
+        emit!(MasterAuthorityProposed { new_authority });
+        Ok(())
+    }
+    
+    pub fn accept_master_authority(ctx: Context<AcceptMasterAuthority>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(
+            config.pending_master_authority == Some(ctx.accounts.new_authority.key()),
+            StablecoinError::NoPendingTransfer
+        );
+        config.master_authority = ctx.accounts.new_authority.key();
+        config.pending_master_authority = None;
+        emit!(MasterAuthorityAccepted { new_authority: ctx.accounts.new_authority.key() });
         Ok(())
     }
 }
@@ -466,8 +509,12 @@ pub struct UpdateBlacklister<'info> {
 
 #[derive(Accounts)]
 pub struct MintTokens<'info> {
+    #[account(
+        seeds = [b"stablecoin", mint.key().as_ref()],
+        bump = config.bump
+    )]
     pub config: Account<'info, StablecoinConfig>,
-    #[account(mut)]
+    #[account(address = config.mint)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub destination: InterfaceAccount<'info, TokenAccount>,
@@ -477,8 +524,12 @@ pub struct MintTokens<'info> {
 
 #[derive(Accounts)]
 pub struct Burn<'info> {
+    #[account(
+        seeds = [b"stablecoin", mint.key().as_ref()],
+        bump = config.bump
+    )]
     pub config: Account<'info, StablecoinConfig>,
-    #[account(mut)]
+    #[account(address = config.mint)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub from: InterfaceAccount<'info, TokenAccount>,
@@ -489,20 +540,29 @@ pub struct Burn<'info> {
 #[derive(Accounts)]
 pub struct Seize<'info> {
     pub config: Account<'info, StablecoinConfig>,
+    #[account(address = config.mint)]
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(mut)]
+    #[account(mut, constraint = source.key() != destination.key() @ StablecoinError::SameAccount)]
     pub source: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
     pub destination: InterfaceAccount<'info, TokenAccount>,
-    /// CHECK: Address is validated in instruction logic
-    pub source_blacklist: UncheckedAccount<'info>,
+    #[account(
+        seeds = [b"blacklist", config.key().as_ref(), source.owner.as_ref()],
+        bump,
+    )]
+    pub source_blacklist: Account<'info, BlacklistEntry>,
     pub seizer: Signer<'info>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
 pub struct FreezeAccount<'info> {
+    #[account(
+        seeds = [b"stablecoin", mint.key().as_ref()],
+        bump = config.bump
+    )]
     pub config: Account<'info, StablecoinConfig>,
+    #[account(address = config.mint)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub account: InterfaceAccount<'info, TokenAccount>,
@@ -512,7 +572,12 @@ pub struct FreezeAccount<'info> {
 
 #[derive(Accounts)]
 pub struct ThawAccount<'info> {
+    #[account(
+        seeds = [b"stablecoin", mint.key().as_ref()],
+        bump = config.bump
+    )]
     pub config: Account<'info, StablecoinConfig>,
+    #[account(address = config.mint)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub account: InterfaceAccount<'info, TokenAccount>,
@@ -556,16 +621,50 @@ pub struct BlacklistRemove<'info> {
 #[derive(Accounts)]
 pub struct Transfer<'info> {
     pub config: Account<'info, StablecoinConfig>,
-    /// CHECK: Address is validated in instruction logic
+    /// CHECK: Validated by seeds constraint, account data length checked in instruction
+    #[account(
+        seeds = [b"blacklist", config.key().as_ref(), from.owner.as_ref()],
+        bump,
+    )]
     pub sender_blacklist: UncheckedAccount<'info>,
-    /// CHECK: Address is validated in instruction logic
+    /// CHECK: Validated by seeds constraint, account data length checked in instruction
+    #[account(
+        seeds = [b"blacklist", config.key().as_ref(), to.owner.as_ref()],
+        bump,
+    )]
     pub receiver_blacklist: UncheckedAccount<'info>,
-    #[account(mut)]
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    #[account(mut, constraint = from.key() != to.key() @ StablecoinError::SameAccount)]
     pub from: InterfaceAccount<'info, TokenAccount>,
+
     #[account(mut)]
     pub to: InterfaceAccount<'info, TokenAccount>,
     pub authority: Signer<'info>,
     pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct ProposeMasterAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"stablecoin", config.mint.as_ref()],
+        bump = config.bump
+    )]
+    pub config: Account<'info, StablecoinConfig>,
+    pub authority: Signer<'info>, // must be current master_authority
+}
+
+#[derive(Accounts)]
+pub struct AcceptMasterAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [b"stablecoin", config.mint.as_ref()],
+        bump = config.bump
+    )]
+    pub config: Account<'info, StablecoinConfig>,
+    /// The new authority accepting the transfer – must match pending_master_authority
+    pub new_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

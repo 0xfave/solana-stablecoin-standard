@@ -46,4 +46,10 @@ pub enum StablecoinError {
     MinterNotFound,
     #[msg("Too many minters (max 10)")]
     TooManyMinters,
+    #[msg("Source and destination accounts cannot be the same")]
+    SameAccount,
+    #[msg("Burning is paused")]
+    BurnPaused,
+    #[msg("No pending master authority transfer for this account")]
+    NoPendingTransfer,
 }
