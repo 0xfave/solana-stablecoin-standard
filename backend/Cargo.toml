@@ -22,7 +22,7 @@ uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 chrono = { version = "0.4", features = ["serde"] }
 solana-client = "2.0"
 solana-transaction-status = "2.0"
-tokio-tungstenite = "0.21"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
 futures-util = "0.3"
 base64 = "0.22"
 sha2 = "0.10"

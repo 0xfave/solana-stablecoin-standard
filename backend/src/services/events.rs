@@ -132,6 +132,7 @@ impl EventListener {
             info!("Starting event listener for program: {}", self.config.program_id);
             
             let ws_url = self.build_ws_url();
+            println!("DEBUG: Connecting to websocket: {}", ws_url);
             info!("Connecting to websocket: {}", ws_url);
 
             match connect_async(&ws_url).await {
@@ -181,8 +182,7 @@ impl EventListener {
     }
 
     fn build_ws_url(&self) -> String {
-        let rpc = self.config.rpc_url.trim_start_matches("https://").trim_start_matches("http://");
-        format!("wss://{}/ws", rpc)
+        self.config.ws_url.clone()
     }
 
     fn build_subscribe_message(&self) -> Result<serde_json::Value, serde_json::Error> {
