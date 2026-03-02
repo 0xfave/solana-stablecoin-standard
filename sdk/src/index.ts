@@ -15,7 +15,7 @@ export const PRESET = {
 
 export type Preset = (typeof PRESET)[keyof typeof PRESET];
 
-function getInstructionDiscriminator(name: string): Buffer {
+export function getInstructionDiscriminator(name: string): Buffer {
   const hash = createHash("sha256").update(`global:${name}`).digest();
   return hash.slice(0, 8);
 }

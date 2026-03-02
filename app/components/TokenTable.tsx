@@ -1,65 +1,288 @@
-const tokens = [
-  { name: "NEO_GENESIS_SSS", supply: "1,000,000,000.00", status: "Active" },
-  { name: "SSS_PROTOCOL_v1", supply: "500,000.00", status: "Locked" },
-];
+"use client";
+
+import { useState } from "react";
+import { useSolana } from "@/lib/useSolana";
 
 export default function TokenTable() {
-  return (
-    <section className="osint-card p-6 rounded-md relative overflow-hidden">
-      <div className="absolute top-0 right-0 p-2 opacity-10 font-mono text-xs">SYS_LOG_09X</div>
-      <div className="flex justify-between items-end mb-6">
-        <div>
-          <h2 className="text-sm font-mono text-[#25d1f4] mb-1 uppercase tracking-widest flex items-center gap-2">
-            <span className="w-2 h-2 bg-[#25d1f4] animate-pulse"></span>
-            My Assets
-          </h2>
-          <p className="text-2xl font-bold">Token Management Console</p>
+  const { connected, tokens, isLoading, refreshTokens, createToken } = useSolana();
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [createdToken, setCreatedToken] = useState<{ name: string; symbol: string; mint: string } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [tokenName, setTokenName] = useState("");
+  const [tokenSymbol, setTokenSymbol] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
+
+  const formatSupply = (supply: string, decimals: number) => {
+    try {
+      const num = parseFloat(supply);
+      return num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    } catch {
+      return supply;
+    }
+  };
+
+  const handleCreateToken = async () => {
+    if (!tokenName || !tokenSymbol || selectedPreset === null) {
+      alert("Please fill in all fields");
+      return;
+    }
+    setCreating(true);
+    try {
+      const result = await createToken(selectedPreset, 6, tokenName, tokenSymbol);
+      setShowCreateModal(false);
+      setCreatedToken({ name: tokenName, symbol: tokenSymbol, mint: result.mintAddress.toString() });
+      setShowSuccessModal(true);
+      setTokenName("");
+      setTokenSymbol("");
+      setSelectedPreset(null);
+    } catch (err) {
+      console.error("Error creating token:", err);
+      alert(err instanceof Error ? err.message : "Failed to create token");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openModal = () => {
+    setSelectedPreset(null);
+    setTokenName("");
+    setTokenSymbol("");
+    setShowCreateModal(true);
+  };
+
+  if (!connected) {
+    return (
+      <section className="osint-card p-6 rounded-md relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-2 opacity-10 font-mono text-xs">SYS_LOG_09X</div>
+        <div className="flex justify-between items-end mb-6">
+          <div>
+            <h2 className="text-sm font-mono text-[#25d1f4] mb-1 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-2 h-2 bg-[#25d1f4] animate-pulse"></span>
+              My Assets
+            </h2>
+            <p className="text-2xl font-bold">Token Management Console</p>
+          </div>
         </div>
-        <button className="bg-[#25d1f4] text-black px-4 py-2 text-xs font-bold uppercase hover:bg-white transition-colors">
-          Create New Token sss-1/sss-2
-        </button>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse">
-          <thead className="text-[10px] uppercase font-mono text-slate-500 border-b border-white/5">
-            <tr>
-              <th className="pb-3 px-4">Token Name</th>
-              <th className="pb-3 px-4">Total Supply</th>
-              <th className="pb-3 px-4 text-center" colSpan={3}>Management Operations</th>
-              <th className="pb-3 px-4 text-right">State</th>
-            </tr>
-          </thead>
-          <tbody className="text-sm">
-            {tokens.map((token, i) => (
-              <tr key={i} className="border-b border-white/5 hover:bg-white/5 group transition-colors">
-                <td className="py-4 px-4 font-bold text-[#25d1f4]">{token.name}</td>
-                <td className="py-4 px-4 font-mono">{token.supply}</td>
-                <td className="py-4 px-1">
-                  <button className="w-full text-[10px] border border-white/20 py-1 hover:border-[#25d1f4] transition-colors uppercase">Add Minter</button>
-                </td>
-                <td className="py-4 px-1">
-                  <button className="w-full text-[10px] border border-white/20 py-1 hover:border-[#25d1f4] transition-colors uppercase">Add Freezer</button>
-                </td>
-                <td className="py-4 px-1">
-                  <button className="w-full text-[10px] bg-[#25d1f4]/20 text-[#25d1f4] border border-[#25d1f4]/40 py-1 hover:bg-[#25d1f4] hover:text-black transition-all uppercase">Select Token</button>
-                </td>
-                <td className="py-4 px-4 text-right">
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${
-                    token.status === "Active" 
-                      ? "bg-green-500/20 text-green-400" 
-                      : "bg-yellow-500/20 text-yellow-400"
-                  }`}>
-                    {token.status}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-4 text-center">
-        <p className="text-[10px] font-mono text-slate-500 animate-bounce">↓ Scroll to show other tokens ↓</p>
-      </div>
-    </section>
+        <div className="text-center py-8 text-slate-500">
+          Connect wallet to view tokens
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="osint-card p-6 rounded-md relative overflow-hidden">
+        <div className="absolute top-0 right-0 p-2 opacity-10 font-mono text-xs">SYS_LOG_09X</div>
+        <div className="flex justify-between items-end mb-6">
+          <div>
+            <h2 className="text-sm font-mono text-[#25d1f4] mb-1 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-2 h-2 bg-[#25d1f4] animate-pulse"></span>
+              My Assets
+            </h2>
+            <p className="text-2xl font-bold">Token Management Console</p>
+          </div>
+          <div className="flex gap-2">
+            <button 
+              onClick={() => refreshTokens(true)}
+              className="px-4 py-2 text-[10px] border border-white/20 text-slate-400 hover:border-[#25d1f4] hover:text-[#25d1f4] transition-colors uppercase"
+            >
+              Refresh
+            </button>
+            <button 
+              onClick={() => openModal(0)}
+              className="bg-[#25d1f4] text-black px-4 py-2 text-xs font-bold uppercase hover:bg-white transition-colors"
+            >
+              Create New Token sss-1/sss-2
+            </button>
+          </div>
+        </div>
+        
+        {isLoading ? (
+          <div className="text-center py-8 text-slate-500">
+            Loading tokens...
+          </div>
+        ) : tokens.length === 0 ? (
+          <div className="text-center py-8 text-slate-500">
+            No SSS tokens found for this wallet
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead className="text-[10px] uppercase font-mono text-slate-500 border-b border-white/5">
+                <tr>
+                  <th className="pb-3 px-4">Token Address</th>
+                  <th className="pb-3 px-4">Total Supply</th>
+                  <th className="pb-3 px-4 text-center" colSpan={3}>Management Operations</th>
+                  <th className="pb-3 px-4 text-right">State</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {tokens.map((token, i) => (
+                  <tr key={i} className="border-b border-white/5 hover:bg-white/5 group transition-colors">
+                    <td className="py-4 px-4 font-bold text-[#25d1f4]">
+                      {token.mint.slice(0, 8)}...{token.mint.slice(-4)}
+                    </td>
+                    <td className="py-4 px-4 font-mono">{formatSupply(token.supply, token.decimals)}</td>
+                    <td className="py-4 px-1">
+                      <button className="w-full text-[10px] border border-white/20 py-1 hover:border-[#25d1f4] transition-colors uppercase">Add Minter</button>
+                    </td>
+                    <td className="py-4 px-1">
+                      <button className="w-full text-[10px] border border-white/20 py-1 hover:border-[#25d1f4] transition-colors uppercase">Add Freezer</button>
+                    </td>
+                    <td className="py-4 px-1">
+                      <button className="w-full text-[10px] bg-[#25d1f4]/20 text-[#25d1f4] border border-[#25d1f4]/40 py-1 hover:bg-[#25d1f4] hover:text-black transition-all uppercase">Select Token</button>
+                    </td>
+                    <td className="py-4 px-4 text-right">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${
+                        token.paused 
+                          ? "bg-yellow-500/20 text-yellow-400" 
+                          : "bg-green-500/20 text-green-400"
+                      }`}>
+                        {token.paused ? "Paused" : "Active"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        
+        {tokens.length > 0 && (
+          <div className="mt-4 text-center">
+            <p className="text-[10px] font-mono text-slate-500 animate-bounce">↓ Scroll to show other tokens ↓</p>
+          </div>
+        )}
+      </section>
+
+      {/* Create Token Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold mb-4 text-[#25d1f4]">Create New Token</h3>
+            
+            {!selectedPreset ? (
+              <>
+                <p className="text-sm text-slate-400 mb-6">
+                  Select a preset for your stablecoin:
+                </p>
+                <div className="space-y-3">
+                  <button
+                    onClick={() => setSelectedPreset(0)}
+                    className="w-full p-4 border border-[#25d1f4]/40 bg-[#25d1f4]/10 hover:bg-[#25d1f4]/20 rounded-md text-left transition-colors"
+                  >
+                    <div className="font-bold text-[#25d1f4]">SSS-1</div>
+                    <div className="text-xs text-slate-400">Basic stablecoin - no compliance features</div>
+                  </button>
+                  <button
+                    onClick={() => setSelectedPreset(1)}
+                    className="w-full p-4 border border-[#25d1f4]/40 bg-[#25d1f4]/10 hover:bg-[#25d1f4]/20 rounded-md text-left transition-colors"
+                  >
+                    <div className="font-bold text-[#25d1f4]">SSS-2</div>
+                    <div className="text-xs text-slate-400">Compliant stablecoin - blacklist, freeze, seize</div>
+                  </button>
+                </div>
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="mt-4 w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-slate-400 mb-6">
+                  Configure your stablecoin:
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1 uppercase">Token Name</label>
+                    <input
+                      type="text"
+                      value={tokenName}
+                      onChange={(e) => setTokenName(e.target.value)}
+                      placeholder="My Stablecoin"
+                      className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1 uppercase">Symbol</label>
+                    <input
+                      type="text"
+                      value={tokenSymbol}
+                      onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
+                      placeholder="MYS"
+                      maxLength={10}
+                      className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1 uppercase">Preset</label>
+                    <div className="text-sm text-[#25d1f4]">
+                      {selectedPreset === 0 ? "SSS-1 (Basic)" : "SSS-2 (Compliant)"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleCreateToken}
+                    disabled={creating || !tokenName || !tokenSymbol}
+                    className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {creating ? "Creating..." : "Create Token"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setSelectedPreset(null);
+                      setTokenName("");
+                      setTokenSymbol("");
+                    }}
+                    className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
+                  >
+                    Back
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Success Modal */}
+      {showSuccessModal && createdToken && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <h3 className="text-lg font-bold mb-2 text-green-400">Token Created!</h3>
+              <div className="space-y-2 text-sm">
+                <div className="bg-black/30 rounded p-3">
+                  <div className="text-slate-400 text-xs uppercase">Token Name</div>
+                  <div className="text-[#25d1f4] font-bold">{createdToken.name}</div>
+                </div>
+                <div className="bg-black/30 rounded p-3">
+                  <div className="text-slate-400 text-xs uppercase">Symbol</div>
+                  <div className="text-[#25d1f4] font-bold">{createdToken.symbol}</div>
+                </div>
+                <div className="bg-black/30 rounded p-3">
+                  <div className="text-slate-400 text-xs uppercase">Mint Address</div>
+                  <div className="text-white font-mono text-xs break-all">{createdToken.mint}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSuccessModal(false)}
+                className="mt-4 w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

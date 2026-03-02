@@ -8,7 +8,7 @@ export default function Footer() {
         </div>
         <div>Latency: 24ms</div>
       </div>
-      <div>© 2024 WORLDMONITOR.IO / SSS PROTOCOL</div>
+      <div>© 2026 SuperTeamBr / SSS PROTOCOL</div>
     </footer>
   );
 }

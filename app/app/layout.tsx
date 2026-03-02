@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import SolanaProviders from "./providers";
 
 export const metadata: Metadata = {
   title: "SSS Token Dashboard - WorldMonitor OSINT",
@@ -14,7 +15,9 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="min-h-screen">
-        {children}
+        <SolanaProviders>
+          {children}
+        </SolanaProviders>
       </body>
     </html>
   );
