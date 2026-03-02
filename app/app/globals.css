@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+:root {
+  --brand: #25d1f4;
+  --brand-dark: #0e4a57;
+  --brand-glow: rgba(37, 209, 244, 0.4);
+  --surface-900: #0a0a0b;
+  --surface-800: #141417;
+  --surface-700: #1f1f23;
+  --surface-600: #2d2d33;
+}
+
+@theme inline {
+  --color-brand: #25d1f4;
+  --color-brand-dark: #0e4a57;
+  --color-brand-glow: rgba(37, 209, 244, 0.4);
+  --color-surface-900: #0a0a0b;
+  --color-surface-800: #141417;
+  --color-surface-700: #1f1f23;
+  --color-surface-600: #2d2d33;
+}
+
+body {
+  background-color: #050505;
+  color: #e2e8f0;
+  font-family: 'Inter', sans-serif;
+  background-image: 
+    linear-gradient(rgba(37, 209, 244, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 209, 244, 0.03) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+body::before {
+  content: " ";
+  display: block;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+  z-index: 9999;
+  background-size: 100% 4px, 3px 100%;
+  pointer-events: none;
+  opacity: 0.3;
+}
+
+.neon-border {
+  box-shadow: 0 0 10px rgba(37, 209, 244, 0.1), inset 0 0 5px rgba(37, 209, 244, 0.05);
+  border: 1px solid rgba(37, 209, 244, 0.2);
+}
+
+.neon-text {
+  text-shadow: 0 0 8px rgba(37, 209, 244, 0.6);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #0a0a0b;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #25d1f4;
+  border-radius: 2px;
+}
+
+.osint-card {
+  background: rgba(20, 20, 23, 0.8);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
