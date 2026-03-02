@@ -1,9 +1,9 @@
-import { Connection, PublicKey, Transaction } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction } from "@solana/web3.js";
 export declare const PRESET: {
     readonly SSS_1: 0;
     readonly SSS_2: 1;
 };
-export type Preset = typeof PRESET[keyof typeof PRESET];
+export type Preset = (typeof PRESET)[keyof typeof PRESET];
 export interface Signer {
     publicKey: PublicKey;
     signTransaction(tx: Transaction): Promise<Transaction>;
@@ -15,6 +15,10 @@ export interface CreateStablecoinParams {
     preset: Preset;
     supplyCap?: number;
     authority: Signer;
+    extensions?: {
+        permanentDelegate?: boolean;
+        transferHook?: boolean;
+    };
 }
 export interface MintParams {
     recipient: PublicKey;
@@ -57,6 +61,8 @@ export declare class SolanaStablecoin {
     burn(params: BurnParams): Promise<string>;
     transfer(params: TransferParams): Promise<string>;
     get compliance(): ComplianceClient;
+    addMinter(newMinter: PublicKey, authority: Signer): Promise<string>;
+    removeMinter(minter: PublicKey, authority: Signer): Promise<string>;
 }
 export declare class ComplianceClient {
     private stablecoin;

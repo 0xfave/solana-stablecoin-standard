@@ -98,7 +98,7 @@ mod tests {
 
     pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair, mint: &Keypair, mint_authority: &Pubkey, decimals: u8) {
         let token_program = TOKEN_2022_ID;
-        
+
         // Compute the config PDA — this is deterministic from the mint pubkey
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
 
@@ -178,7 +178,7 @@ mod tests {
 
         let accounts = vec![
             AccountMeta::new(config_pda, false),
-            AccountMeta::new(*mint, false),            // ✅ mutable
+            AccountMeta::new(*mint, false), // ✅ mutable
             AccountMeta::new(authority.pubkey(), true),
             AccountMeta::new_readonly(token_program, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
@@ -971,7 +971,7 @@ mod tests {
         // Mint tokens to the account
         // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
-        
+
         // Freeze account - should succeed
         let result = freeze_account(svm, payer, mint_authority, &mint.pubkey(), &token_account);
         assert!(result.is_ok(), "freeze_account should succeed when called by master_authority");
@@ -996,7 +996,7 @@ mod tests {
         let token_account = create_token_account(svm, payer, &mint.pubkey());
         // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
-        
+
         // Try to freeze with non-owner - should fail
         let non_owner = Keypair::new();
         svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
@@ -1562,7 +1562,7 @@ mod tests {
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
         // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
-        
+
         // Freeze account first
         freeze_account(svm, payer, mint_authority, &mint.pubkey(), &token_account).unwrap();
 

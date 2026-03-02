@@ -96,12 +96,16 @@ backend-docker-run:
 
 # SDK: build TypeScript SDK
 sdk-build:
-	cd sdk && yarn install && yarn build
+	cd sdk && npm install && npm run build
 	@echo "SDK built at sdk/dist/"
 
-# SDK: run SDK tests
+# SDK: run unit tests
 sdk-test:
-	cd sdk && yarn test
+	cd sdk && npm test
+
+# SDK: run live tests on devnet (requires .env with PRIVATE_KEY)
+sdk-test-live:
+	cd sdk && npm run test:live
 
 # SDK: all (install + build)
 sdk: sdk-build
