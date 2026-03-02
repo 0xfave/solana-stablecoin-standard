@@ -138,7 +138,7 @@ impl SolanaService {
             &self.token_program_id,
             &mint.pubkey(),
             &self.payer.pubkey(),
-            Some(&config),
+            Some(&self.payer.pubkey()),
             decimals,
         )
         .map_err(|e| format!("Failed to create init mint ix: {}", e))?;
