@@ -4,9 +4,9 @@ mod tests {
     use crate::services::mint_burn::{MintBurnService, MintBurnConfig};
     use crate::services::compliance::ComplianceService;
     use crate::services::events::{EventIndexer, OnChainEvent, EventType};
+    use crate::services::solana::{SolanaService, PROGRAM_ID};
 
     const DEVNET_RPC: &str = "https://api.devnet.solana.com";
-    const PROGRAM_ID: &str = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
 
     #[tokio::test]
     async fn test_rpc_connection() {
@@ -127,5 +127,71 @@ mod tests {
         }
         
         assert!(result.is_ok(), "Should query program");
+    }
+
+    #[test]
+    fn test_solana_service_initialize_and_mint() {
+        let _ = dotenvy::dotenv();
+        let private_key = std::env::var("PRIVATE_KEY_BASE64")
+            .expect("PRIVATE_KEY_BASE64 not set");
+        
+        let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| DEVNET_RPC.to_string());
+        
+        let service = SolanaService::new(&rpc_url, &private_key)
+            .expect("Failed to create Solana service");
+        
+        println!("Initializing new stablecoin...");
+        let result = service.initialize(0, Some(1_000_000_000_000), 6);
+        
+        let (mint, config) = match result {
+            Ok((m, c)) => {
+                println!("✓ Initialize successful!");
+                println!("  Mint: {}", m);
+                println!("  Config: {}", c);
+                (m, c)
+            }
+            Err(e) => {
+                println!("⚠ Initialize failed: {}", e);
+                panic!("Initialize failed: {}", e);
+            }
+        };
+        
+        let recipient = service.payer_pubkey();
+        
+        println!("Minting 1 token to {}...", recipient);
+        let mint_result = service.mint_tokens(&mint, &recipient, 1);
+        
+        if mint_result.success {
+            println!("✓ Mint successful: {}", mint_result.signature);
+        } else {
+            println!("⚠ Mint failed: {:?}", mint_result.error);
+            panic!("Mint failed: {:?}", mint_result.error);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_instruction_discriminators() {
+        use sha2::{Sha256, Digest};
+        
+        fn get_disc(name: &str) -> [u8; 8] {
+            let mut hasher = Sha256::new();
+            hasher.update(format!("global:{}", name));
+            let result = hasher.finalize();
+            let mut discriminator = [0u8; 8];
+            discriminator.copy_from_slice(&result[..8]);
+            discriminator
+        }
+        
+        let mint_disc = get_disc("mint");
+        assert_eq!(mint_disc.len(), 8);
+        println!("Mint discriminator: {:?}", mint_disc);
+        
+        let burn_disc = get_disc("burn");
+        assert_eq!(burn_disc.len(), 8);
+        println!("Burn discriminator: {:?}", burn_disc);
+        
+        let transfer_disc = get_disc("transfer");
+        assert_eq!(transfer_disc.len(), 8);
+        println!("Transfer discriminator: {:?}", transfer_disc);
     }
 }

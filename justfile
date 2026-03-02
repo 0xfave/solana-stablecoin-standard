@@ -110,6 +110,17 @@ sdk-test-live:
 # SDK: all (install + build)
 sdk: sdk-build
 
+# Backend: run tests
+backend-test:
+	cd backend && cargo test
+
+# Backend: run integration tests (requires devnet)
+backend-integration:
+	cd backend && cargo test integration_tests
+
+# Backend: all (install + build)
+backend: backend-build
+
 # ---------------------------------------------------------------------------- #
 #                                CLI COMMANDS                                   #
 # ---------------------------------------------------------------------------- #
