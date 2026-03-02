@@ -98,6 +98,9 @@ mod tests {
 
     pub fn create_mint(svm: &mut LiteSVM, payer: &Keypair, mint: &Keypair, mint_authority: &Pubkey, decimals: u8) {
         let token_program = TOKEN_2022_ID;
+        
+        // Compute the config PDA — this is deterministic from the mint pubkey
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
 
         // Calculate mint space with permanent delegate extension
         let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<
@@ -116,7 +119,7 @@ mod tests {
 
         // Add permanent delegate extension
         let initialize_extension_ix =
-            spl_token_2022::instruction::initialize_permanent_delegate(&token_program, &mint.pubkey(), mint_authority)
+            spl_token_2022::instruction::initialize_permanent_delegate(&token_program, &mint.pubkey(), &config_pda)
                 .unwrap();
 
         // Initialize mint (must come after extension)
@@ -175,7 +178,7 @@ mod tests {
 
         let accounts = vec![
             AccountMeta::new(config_pda, false),
-            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*mint, false),            // ✅ mutable
             AccountMeta::new(authority.pubkey(), true),
             AccountMeta::new_readonly(token_program, false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
@@ -966,8 +969,9 @@ mod tests {
         let token_account = create_token_account(svm, payer, &mint.pubkey());
 
         // Mint tokens to the account
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
-
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
+        
         // Freeze account - should succeed
         let result = freeze_account(svm, payer, mint_authority, &mint.pubkey(), &token_account);
         assert!(result.is_ok(), "freeze_account should succeed when called by master_authority");
@@ -990,8 +994,9 @@ mod tests {
         let user = Keypair::new();
         svm.airdrop(&user.pubkey(), LAMPORTS_PER_SOL).unwrap();
         let token_account = create_token_account(svm, payer, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
-
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
+        
         // Try to freeze with non-owner - should fail
         let non_owner = Keypair::new();
         svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
@@ -1171,21 +1176,29 @@ mod tests {
         add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter2.pubkey()).unwrap();
         add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter3.pubkey()).unwrap();
 
-        let token_account = create_token_account(svm, payer, &mint.pubkey());
+        // Create separate token accounts for each minter (owned by respective minter)
+        let token_account1 = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
+        let token_account2 = create_token_account_for_owner(svm, payer, &minter2, &mint.pubkey());
+        let token_account3 = create_token_account_for_owner(svm, payer, &minter3, &mint.pubkey());
 
-        // All three minters should be able to mint
-        assert!(
-            program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 100).is_ok(),
-            "original authority should still be able to mint"
-        );
-        assert!(
-            program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account, 100).is_ok(),
-            "minter2 should be able to mint"
-        );
-        assert!(
-            program_mint(svm, payer, &minter3, &mint.pubkey(), &token_account, 100).is_ok(),
-            "minter3 should be able to mint"
-        );
+        // All three minters should be able to mint to their own token accounts
+        let result1 = program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 100);
+        if result1.is_err() {
+            println!("mint_authority mint failed: {:?}", result1);
+        }
+        assert!(result1.is_ok(), "original authority should still be able to mint");
+
+        let result2 = program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account2, 100);
+        if result2.is_err() {
+            println!("minter2 mint failed: {:?}", result2);
+        }
+        assert!(result2.is_ok(), "minter2 should be able to mint");
+
+        let result3 = program_mint(svm, payer, &minter3, &mint.pubkey(), &token_account3, 100);
+        if result3.is_err() {
+            println!("minter3 mint failed: {:?}", result3);
+        }
+        assert!(result3.is_ok(), "minter3 should be able to mint");
     }
 
     #[test]
@@ -1204,7 +1217,8 @@ mod tests {
 
         add_minter(svm, payer, mint_authority, &mint.pubkey(), &minter2.pubkey()).unwrap();
 
-        let token_account = create_token_account(svm, payer, &mint.pubkey());
+        // Create token account owned by minter2
+        let token_account = create_token_account_for_owner(svm, payer, &minter2, &mint.pubkey());
 
         // Can mint before removal
         assert!(program_mint(svm, payer, &minter2, &mint.pubkey(), &token_account, 100).is_ok());
@@ -1474,7 +1488,8 @@ mod tests {
 
         // Create token account for mint_authority (who is the minter)
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
 
         // Burn tokens using program instruction (mint_authority is minter and owns the ATA)
         let result = program_burn(svm, payer, mint_authority, &mint.pubkey(), &token_account, 500);
@@ -1496,7 +1511,8 @@ mod tests {
 
         // Create token account for mint_authority and mint tokens
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
 
         // Try to burn with non-minter - should fail
         let non_minter = Keypair::new();
@@ -1521,7 +1537,8 @@ mod tests {
 
         // Create token account for mint_authority and mint only 500 tokens
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 500);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 500);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 500).unwrap();
 
         // Try to burn more than balance - should fail
         let result = program_burn(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000);
@@ -1543,8 +1560,9 @@ mod tests {
 
         // Create token account and mint tokens
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
-
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
+        
         // Freeze account first
         freeze_account(svm, payer, mint_authority, &mint.pubkey(), &token_account).unwrap();
 
@@ -1568,7 +1586,8 @@ mod tests {
 
         // Create token account and mint tokens
         let token_account = create_token_account_for_owner(svm, payer, mint_authority, &mint.pubkey());
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account, 1000).unwrap();
 
         // Thaw account without freezing first - SPL Token fails on non-frozen account
         let result = thaw_account(svm, payer, mint_authority, &mint.pubkey(), &token_account);
@@ -1643,7 +1662,8 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         // Mint tokens to victim
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         // Add victim to blacklist
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
@@ -1687,7 +1707,8 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         // Mint tokens to victim
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         // Add victim to blacklist
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
@@ -1729,7 +1750,8 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         // Mint tokens to victim (but DON'T blacklist)
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         // Try to seize - should fail (not blacklisted)
         let result = seize(
@@ -1768,7 +1790,8 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         // Mint tokens to victim
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &victim_token_account, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         // Try to seize in SSS-1 - should fail
         let result = seize(
@@ -1935,7 +1958,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Transfer - should succeed (SSS-1 with no hook required)
         let result = transfer(
@@ -1975,7 +1999,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Transfer - should fail (hook not set in SSS-2)
         let result = transfer(
@@ -2018,7 +2043,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Transfer - should succeed (not blacklisted)
         let result = transfer(
@@ -2061,7 +2087,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Add user1 to blacklist
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user1.pubkey(), "Test reason".to_string()).unwrap();
@@ -2107,7 +2134,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Add user2 to blacklist
         blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user2.pubkey(), "Test reason".to_string()).unwrap();
@@ -2150,7 +2178,8 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         // Mint tokens to user1
-        mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        // mint_tokens(svm, payer, &mint.pubkey(), mint_authority, &token_account1, 1000);
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         // Pause the token
         update_paused(svm, payer, mint_authority, &mint.pubkey(), true).unwrap();

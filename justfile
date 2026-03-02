@@ -159,6 +159,9 @@ cli-blacklist-add address:
 
 cli-blacklist-remove address:
 	cd cli && cargo run --release -- blacklist remove {{address}}
+	
+cli-blacklist-check address:
+	cd cli && cargo run --release -- blacklist check {{address}}
 
 # CLI seize
 cli-seize address to amount:

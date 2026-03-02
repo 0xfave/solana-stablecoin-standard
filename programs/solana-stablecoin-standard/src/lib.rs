@@ -1,4 +1,6 @@
-use anchor_lang::{prelude::*, solana_program::program::invoke};
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::account_info::AccountInfo;
+use anchor_lang::solana_program::program::{invoke, invoke_signed};
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 declare_id!("Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6");
@@ -33,6 +35,27 @@ pub mod solana_stablecoin_standard {
         config.pauser = authority_key;
         config.blacklister = authority_key;
 
+        let config_key = ctx.accounts.config.key();
+        let mint_key = ctx.accounts.mint.key();
+
+        let set_authority_ix = spl_token_2022::instruction::set_authority(
+            &ctx.accounts.token_program.key(),
+            &mint_key,
+            Some(&config_key),
+            spl_token_2022::instruction::AuthorityType::MintTokens,
+            &authority_key,
+            &[],
+        )?;
+
+        invoke(
+            &set_authority_ix,
+            &[
+                ctx.accounts.token_program.to_account_info(),
+                ctx.accounts.mint.to_account_info(),
+                ctx.accounts.authority.to_account_info(),
+            ],
+        )?;
+
         emit!(ConfigInitialized {
             config: ctx.accounts.config.key(),
             authority: authority_key,
@@ -63,35 +86,20 @@ pub mod solana_stablecoin_standard {
 
     pub fn add_minter(ctx: Context<UpdateMinter>, new_minter: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
         require!(!config.minters.contains(&new_minter), StablecoinError::AlreadyMinter);
         require!(config.minters.len() < 10, StablecoinError::TooManyMinters);
         config.minters.push(new_minter);
-        emit!(MinterAdded {
-            config: ctx.accounts.config.key(),
-            minter: new_minter,
-        });
+        emit!(MinterAdded { config: ctx.accounts.config.key(), minter: new_minter });
         Ok(())
     }
-    
+
     pub fn remove_minter(ctx: Context<UpdateMinter>, minter: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            config.master_authority,
-            StablecoinError::Unauthorized
-        );
-        let pos = config.minters.iter().position(|m| *m == minter)
-            .ok_or(StablecoinError::MinterNotFound)?;
+        require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
+        let pos = config.minters.iter().position(|m| *m == minter).ok_or(StablecoinError::MinterNotFound)?;
         config.minters.remove(pos);
-        emit!(MinterRemoved {
-            config: ctx.accounts.config.key(),
-            minter,
-        });
+        emit!(MinterRemoved { config: ctx.accounts.config.key(), minter });
         Ok(())
     }
 
@@ -125,22 +133,25 @@ pub mod solana_stablecoin_standard {
 
     pub fn mint(ctx: Context<MintTokens>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require!(
-            config.minters.contains(&ctx.accounts.minter.key()),
-            StablecoinError::UnauthorizedMinter
-        );
+        require!(config.minters.contains(&ctx.accounts.minter.key()), StablecoinError::UnauthorizedMinter);
         require!(!config.paused, StablecoinError::MintPaused);
         if let Some(cap) = config.supply_cap {
             require!(ctx.accounts.mint.supply + amount <= cap, StablecoinError::Overflow);
         }
+
+        let mint_key = ctx.accounts.mint.key();
+        let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
+        let signer_seeds = &[&seeds[..]];
+
         anchor_spl::token_interface::mint_to(
-            CpiContext::new(
+            CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token_interface::MintTo {
                     mint: ctx.accounts.mint.to_account_info(),
                     to: ctx.accounts.destination.to_account_info(),
-                    authority: ctx.accounts.minter.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
                 },
+                signer_seeds,
             ),
             amount,
         )?;
@@ -155,18 +166,21 @@ pub mod solana_stablecoin_standard {
 
     pub fn burn(ctx: Context<Burn>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-        require!(
-            config.minters.contains(&ctx.accounts.burner.key()),
-            StablecoinError::UnauthorizedMinter
-        );
+        require!(config.minters.contains(&ctx.accounts.burner.key()), StablecoinError::UnauthorizedMinter);
+
+        let mint_key = ctx.accounts.mint.key();
+        let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
+        let signer_seeds = &[&seeds[..]];
+
         anchor_spl::token_interface::burn(
-            CpiContext::new(
+            CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 anchor_spl::token_interface::Burn {
                     mint: ctx.accounts.mint.to_account_info(),
                     from: ctx.accounts.from.to_account_info(),
-                    authority: ctx.accounts.burner.to_account_info(),
+                    authority: ctx.accounts.config.to_account_info(),
                 },
+                signer_seeds,
             ),
             amount,
         )?;
@@ -183,10 +197,7 @@ pub mod solana_stablecoin_standard {
         let config = &ctx.accounts.config;
 
         require!(config.preset == 1, StablecoinError::NotCompliantMode);
-        require!(
-            config.minters.contains(&ctx.accounts.seizer.key()),
-            StablecoinError::UnauthorizedSeizer
-        );
+        require!(config.minters.contains(&ctx.accounts.seizer.key()), StablecoinError::UnauthorizedSeizer);
 
         let source_blacklist_key = ctx.accounts.source_blacklist.key();
         let (expected_blacklist, _) = Pubkey::find_program_address(
@@ -202,26 +213,29 @@ pub mod solana_stablecoin_standard {
         let mint_key = ctx.accounts.mint.key();
         let decimals = ctx.accounts.mint.decimals;
 
+        let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
+
         let transfer_ix = spl_token_2022::instruction::transfer_checked(
             &ctx.accounts.token_program.key(),
             &ctx.accounts.source.key(),
             &mint_key,
             &ctx.accounts.destination.key(),
-            &ctx.accounts.seizer.key(),
+            &config.key(),
             &[],
             amount,
             decimals,
         )?;
 
-        invoke(
+        invoke_signed(
             &transfer_ix,
             &[
                 ctx.accounts.source.to_account_info(),
                 ctx.accounts.mint.to_account_info(),
                 ctx.accounts.destination.to_account_info(),
-                ctx.accounts.seizer.to_account_info(),
+                ctx.accounts.config.to_account_info(),
                 ctx.accounts.token_program.to_account_info(),
             ],
+            &[seeds],
         )?;
 
         emit!(TokensSeized {
@@ -376,6 +390,7 @@ pub struct Initialize<'info> {
         bump
     )]
     pub config: Account<'info, StablecoinConfig>,
+    #[account(mut)]
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
     pub authority: Signer<'info>,

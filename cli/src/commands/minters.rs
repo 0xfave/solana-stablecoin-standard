@@ -3,6 +3,7 @@ use crate::signer;
 use anyhow::Result;
 use base64::Engine;
 use clap::Subcommand;
+use solana_sdk::hash::hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
@@ -12,10 +13,18 @@ use std::str::FromStr;
 
 #[derive(Subcommand)]
 pub enum MinterAction {
-    /// Show the current minter
+    /// List all current minters
     List,
-    /// Set a new minter address
-    Set { address: String },
+    /// Add a new minter address
+    Add { address: String },
+    /// Remove an existing minter address
+    Remove { address: String },
+}
+
+fn discriminator(name: &str) -> [u8; 8] {
+    let preimage = format!("global:{}", name);
+    let h = hash(preimage.as_bytes());
+    h.to_bytes()[..8].try_into().unwrap()
 }
 
 pub async fn execute(
@@ -30,10 +39,8 @@ pub async fn execute(
     let mint_pubkey = Pubkey::from_str(&mint_str)?;
     let program_id = Pubkey::from_str(&signer::get_program_id())?;
 
-    let (config, _) = Pubkey::find_program_address(
-        &[b"stablecoin", &mint_pubkey.to_bytes()],
-        &program_id,
-    );
+    let (config, _) =
+        Pubkey::find_program_address(&[b"stablecoin", &mint_pubkey.to_bytes()], &program_id);
 
     match action {
         MinterAction::List => {
@@ -56,18 +63,20 @@ pub async fn execute(
             //   [40..72] mint              (Pubkey)
             //   [72]     preset            (u8)
             //   [73]     paused            (bool)
-            //   [74]     supply_cap flag   (0 = None, 1 = Some)
-            //   [75..83] supply_cap value  (u64, only if flag = 1)
-            //   next     transfer_hook flag (0 = None, 1 = Some)
+            //   [74]     supply_cap flag   (0=None, 1=Some)
+            //   [75..83] supply_cap value  (u64, only if flag=1)
+            //   next     transfer_hook flag (0=None, 1=Some)
             //   +0 or 32 transfer_hook pubkey
-            //   next     decimals          (u8)
-            //   next     bump              (u8)
-            //   next     pending_authority flag
+            //   next     decimals (u8)
+            //   next     bump     (u8)
+            //   next     pending_authority flag (0=None, 1=Some)
             //   +0 or 32 pending_authority pubkey
-            //   next     minter            (Pubkey) ← what we want
-            //   next     freezer           (Pubkey)
-            //   next     pauser            (Pubkey)
-            //   next     blacklister       (Pubkey)
+            //   next     minters: Vec<Pubkey>
+            //               - 4-byte little-endian length prefix
+            //               - N × 32 bytes
+            //   next     freezer      (Pubkey)
+            //   next     pauser       (Pubkey)
+            //   next     blacklister  (Pubkey)
 
             let mut offset = 74usize;
 
@@ -86,12 +95,25 @@ pub async fn execute(
             let pending_flag = decoded[offset]; offset += 1;
             if pending_flag == 1 { offset += 32; }
 
-            // minter
-            if decoded.len() < offset + 32 {
-                anyhow::bail!("Account data too short to read minter");
+            // minters: Vec<Pubkey>  (4-byte length prefix, then N × 32 bytes)
+            if decoded.len() < offset + 4 {
+                anyhow::bail!("Account data too short to read minters length");
             }
-            let minter = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
-            offset += 32;
+            let minter_count = u32::from_le_bytes(
+                decoded[offset..offset + 4].try_into()?
+            ) as usize;
+            offset += 4;
+
+            if decoded.len() < offset + minter_count * 32 {
+                anyhow::bail!("Account data too short to read {} minters", minter_count);
+            }
+
+            let mut minters = Vec::with_capacity(minter_count);
+            for _ in 0..minter_count {
+                let pk = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
+                minters.push(pk);
+                offset += 32;
+            }
 
             // freezer
             let freezer = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
@@ -106,37 +128,63 @@ pub async fn execute(
 
             println!("Stablecoin Roles:");
             println!("  Config:      {}", config);
-            println!("  Minter:      {}", minter);
+            println!("  Minters ({}):", minter_count);
+            for m in &minters {
+                println!("    - {}", m);
+            }
             println!("  Freezer:     {}", freezer);
             println!("  Pauser:      {}", pauser);
             println!("  Blacklister: {}", blacklister);
         }
 
-        MinterAction::Set { address } => {
-            println!("Setting minter to {}", address);
+        MinterAction::Add { address } => {
+            println!("Adding minter: {}", address);
 
             let new_minter = Pubkey::from_str(&address)?;
             let authority = keypair.pubkey();
 
-            // Discriminator from IDL: update_minter = [164, 129, 164, 88, 75, 29, 91, 38]
-            // Args: new_minter (Pubkey = 32 bytes, Borsh encoded)
-            let discriminator: [u8; 8] = [164, 129, 164, 88, 75, 29, 91, 38];
-            let mut data = discriminator.to_vec();
-            data.extend_from_slice(&new_minter.to_bytes()); // Pubkey is 32 raw bytes in Borsh
+            let mut data = discriminator("add_minter").to_vec();
+            data.extend_from_slice(&new_minter.to_bytes());
 
             let ix = Instruction::new_with_bytes(
                 program_id,
                 &data,
                 vec![
-                    AccountMeta::new(config, false),            // config (writable)
-                    AccountMeta::new_readonly(authority, true), // authority (signer)
+                    AccountMeta::new(config, false),
+                    AccountMeta::new(authority, true),
                 ],
             );
 
             let tx = Transaction::new_with_payer(&[ix], Some(&authority));
             let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
-            println!("Minter updated to: {}", address);
+            println!("Minter added: {}", address);
+            println!("Signature: {}", signature);
+            println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
+        }
+
+        MinterAction::Remove { address } => {
+            println!("Removing minter: {}", address);
+
+            let minter = Pubkey::from_str(&address)?;
+            let authority = keypair.pubkey();
+
+            let mut data = discriminator("remove_minter").to_vec();
+            data.extend_from_slice(&minter.to_bytes());
+
+            let ix = Instruction::new_with_bytes(
+                program_id,
+                &data,
+                vec![
+                    AccountMeta::new(config, false),
+                    AccountMeta::new(authority, true),
+                ],
+            );
+
+            let tx = Transaction::new_with_payer(&[ix], Some(&authority));
+            let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
+
+            println!("Minter removed: {}", address);
             println!("Signature: {}", signature);
             println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
         }

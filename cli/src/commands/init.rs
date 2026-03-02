@@ -10,7 +10,7 @@ use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
 
 fn compute_discriminator(name: &str) -> [u8; 8] {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(name.as_bytes());
     let result = hasher.finalize();
@@ -31,13 +31,11 @@ pub async fn execute(
     let cfg = if let Some(config_path) = config {
         StablecoinConfig::from_file(&config_path)?
     } else if let Some(preset_name) = preset {
-        let c = StablecoinConfig::from_preset(&preset_name);
-        c
+        StablecoinConfig::from_preset(&preset_name)
     } else {
         StablecoinConfig::default()
     };
 
-    // Prompt for name
     let name = if let Some(n) = name_arg {
         n
     } else {
@@ -45,14 +43,9 @@ pub async fn execute(
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
         let n = input.trim().to_string();
-        if n.is_empty() {
-            "My Stablecoin".to_string()
-        } else {
-            n
-        }
+        if n.is_empty() { "My Stablecoin".to_string() } else { n }
     };
 
-    // Prompt for symbol
     let symbol = if let Some(s) = symbol_arg {
         s
     } else {
@@ -60,11 +53,7 @@ pub async fn execute(
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
         let s = input.trim().to_string();
-        if s.is_empty() {
-            "STB".to_string()
-        } else {
-            s
-        }
+        if s.is_empty() { "STB".to_string() } else { s }
     };
 
     println!("\nInitializing stablecoin:");
@@ -83,7 +72,8 @@ pub async fn execute(
     let mint = Keypair::new();
     let authority = keypair.pubkey();
 
-    let (config, _) = Pubkey::find_program_address(
+    // ✅ Derive config PDA BEFORE creating the mint
+    let (config_pda, _) = Pubkey::find_program_address(
         &[b"stablecoin", &mint.pubkey().to_bytes()],
         &program_id,
     );
@@ -94,9 +84,11 @@ pub async fn execute(
         _ => 0u8,
     };
 
-    let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[]).unwrap();
+    // ✅ Include PermanentDelegate extension in space calculation
+    let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[spl_token_2022::extension::ExtensionType::PermanentDelegate]).unwrap();
     let lamports = rpc.get_minimum_balance_for_rent_exemption(mint_space)?;
 
+    // Instruction 1: allocate mint account with correct space
     let create_mint_ix = solana_sdk::system_instruction::create_account(
         &authority,
         &mint.pubkey(),
@@ -105,6 +97,15 @@ pub async fn execute(
         &token_program,
     );
 
+    // ✅ Instruction 2: set config PDA as permanent delegate BEFORE initialize_mint2
+    let init_permanent_delegate_ix =
+        spl_token_2022::instruction::initialize_permanent_delegate(
+            &token_program,
+            &mint.pubkey(),
+            &config_pda,
+        )?;
+
+    // Instruction 3: initialize the mint (must come after extensions)
     let initialize_mint_ix = spl_token_2022::instruction::initialize_mint2(
         &token_program,
         &mint.pubkey(),
@@ -113,8 +114,8 @@ pub async fn execute(
         cfg.decimals,
     )?;
 
+    // Instruction 4: call the program's initialize instruction
     let disc = compute_discriminator("global:initialize");
-    
     let mut data = disc.to_vec();
     data.push(preset_val);
     if let Some(cap) = cfg.supply_cap {
@@ -129,7 +130,7 @@ pub async fn execute(
         program_id,
         &data,
         vec![
-            AccountMeta::new(config, false),
+            AccountMeta::new(config_pda, false),
             AccountMeta::new(mint.pubkey(), true),
             AccountMeta::new(authority, true),
             AccountMeta::new_readonly(token_program, false),
@@ -137,18 +138,23 @@ pub async fn execute(
         ],
     );
 
-    let tx = Transaction::new_with_payer(&[create_mint_ix, initialize_mint_ix, init_ix], Some(&authority));
+    let tx = Transaction::new_with_payer(
+        &[create_mint_ix, init_permanent_delegate_ix, initialize_mint_ix, init_ix],
+        Some(&authority),
+    );
 
-    let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer, &mint as &dyn Signer]).await?;
+    let signature = rpc
+        .send_transaction(tx, &[keypair as &dyn Signer, &mint as &dyn Signer])
+        .await?;
 
     let mint_address = mint.pubkey().to_string();
-    let config_address = config.to_string();
-    
+    let config_address = config_pda.to_string();
+
     if let Err(e) = crate::config::CliConfig::load() {
         eprintln!("Note: Could not save to config: {}", e);
     } else {
-        let config = crate::config::CliConfig::load().unwrap_or_default();
-        if let Err(e) = config.save_mint(&mint_address) {
+        let cli_cfg = crate::config::CliConfig::load().unwrap_or_default();
+        if let Err(e) = cli_cfg.save_mint(&mint_address) {
             eprintln!("Note: Could not save mint to config: {}", e);
         } else {
             println!("\n✅ Mint address saved to config.toml");
@@ -156,7 +162,7 @@ pub async fn execute(
     }
 
     println!("\nStablecoin initialized successfully!");
-    println!("  Mint: {}", mint_address);
+    println!("  Mint:   {}", mint_address);
     println!("  Config: {}", config_address);
     println!("  Signature: {}", signature);
     println!("  Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
