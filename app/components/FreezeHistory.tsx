@@ -23,6 +23,9 @@ export default function FreezeHistory({ token }: FreezeHistoryProps) {
   const [showFreezeModal, setShowFreezeModal] = useState(false);
   const [freezing, setFreezing] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [accountToThaw, setAccountToThaw] = useState("");
+  const [showThawModal, setShowThawModal] = useState(false);
+  const [showThawSuccess, setShowThawSuccess] = useState(false);
 
   const tokenLabel = token
     ? token.name ||
@@ -60,21 +63,6 @@ export default function FreezeHistory({ token }: FreezeHistoryProps) {
     }
   };
 
-  const handleThaw = async (accountFull: string) => {
-    if (!token) return;
-    setFreezing(true);
-    try {
-      await thaw(token, accountFull);
-      const updatedHistory = await fetchFreezeHistory(token);
-      setHistory(updatedHistory);
-    } catch (err) {
-      console.error("Error thawing account:", err);
-      alert(err instanceof Error ? err.message : "Failed to thaw account");
-    } finally {
-      setFreezing(false);
-    }
-  };
-
   return (
     <>
       <section className="osint-card flex flex-col h-[400px]">
@@ -107,24 +95,24 @@ export default function FreezeHistory({ token }: FreezeHistoryProps) {
                   <span className="text-xs font-bold">{record.account}</span>
                   <span className="text-[10px] opacity-50">{record.time}</span>
                 </div>
-                <button
-                  onClick={() => handleThaw(record.accountFull)}
-                  disabled={freezing}
-                  className="text-[10px] px-3 py-1 bg-[#25d1f4]/10 border border-[#25d1f4]/40 text-[#25d1f4] hover:bg-[#25d1f4] hover:text-black transition-colors uppercase disabled:opacity-50"
-                >
-                  Thaw
-                </button>
               </div>
             ))
           )}
         </div>
-        <div className="p-3 border-t border-white/10">
+        <div className="p-3 border-t border-white/10 flex gap-2">
           <button
             onClick={() => setShowFreezeModal(true)}
             disabled={!token}
-            className="w-full py-2 bg-white/5 text-[10px] uppercase font-bold hover:bg-[#25d1f4] hover:text-black transition-colors disabled:opacity-50"
+            className="flex-1 py-2 bg-white/5 text-[10px] uppercase font-bold hover:bg-[#25d1f4] hover:text-black transition-colors disabled:opacity-50"
           >
-            Freeze Account
+            Freeze
+          </button>
+          <button
+            onClick={() => setShowThawModal(true)}
+            disabled={!token}
+            className="flex-1 py-2 bg-[#25d1f4]/10 border border-[#25d1f4]/40 text-[#25d1f4] text-[10px] uppercase font-bold hover:bg-[#25d1f4] hover:text-black transition-colors disabled:opacity-50"
+          >
+            Thaw
           </button>
         </div>
       </section>
@@ -190,6 +178,95 @@ export default function FreezeHistory({ token }: FreezeHistoryProps) {
             </p>
             <button
               onClick={() => setShowSuccessModal(false)}
+              className="w-full py-2 bg-[#25d1f4] text-black text-xs uppercase font-bold hover:bg-[#25d1f4]/90 transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showThawModal && token && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px]">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-[#25d1f4] mb-4">
+              Thaw Account
+            </h3>
+            <input
+              type="text"
+              value={accountToThaw}
+              onChange={(e) => setAccountToThaw(e.target.value)}
+              placeholder="Enter account address to thaw"
+              className="w-full px-3 py-2 bg-[#141417] border border-white/10 rounded text-sm mb-4 focus:border-[#25d1f4] outline-none"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowThawModal(false);
+                  setAccountToThaw("");
+                }}
+                className="flex-1 py-2 bg-white/5 text-xs uppercase font-bold hover:bg-white/10 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!token || !accountToThaw) return;
+                  setFreezing(true);
+                  try {
+                    await thaw(token, accountToThaw);
+                    const updatedHistory = await fetchFreezeHistory(token);
+                    setHistory(updatedHistory);
+                    setShowThawModal(false);
+                    setAccountToThaw("");
+                    setShowThawSuccess(true);
+                  } catch (err) {
+                    console.error("Error thawing account:", err);
+                    alert(
+                      err instanceof Error
+                        ? err.message
+                        : "Failed to thaw account"
+                    );
+                  } finally {
+                    setFreezing(false);
+                  }
+                }}
+                disabled={freezing || !accountToThaw}
+                className="flex-1 py-2 bg-[#25d1f4] text-black text-xs uppercase font-bold hover:bg-[#25d1f4]/90 transition-colors disabled:opacity-50"
+              >
+                {freezing ? "Thawing..." : "Thaw"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showThawSuccess && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px] text-center">
+            <div className="w-12 h-12 bg-[#25d1f4]/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-6 h-6 text-[#25d1f4]"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+            <h3 className="text-sm font-bold uppercase tracking-widest text-white mb-2">
+              Account Thawed!
+            </h3>
+            <p className="text-xs text-slate-400 mb-6">
+              The account has been successfully thawed.
+            </p>
+            <button
+              onClick={() => setShowThawSuccess(false)}
               className="w-full py-2 bg-[#25d1f4] text-black text-xs uppercase font-bold hover:bg-[#25d1f4]/90 transition-colors"
             >
               Done

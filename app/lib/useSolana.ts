@@ -80,10 +80,6 @@ export function useSolana() {
             commitment: "confirmed",
           });
 
-          console.log(
-            `Found ${accounts.length} config accounts with matching authority`
-          );
-
           const sssTokens: SssToken[] = [];
 
           for (const { pubkey: configPubkey, account } of accounts) {
@@ -494,7 +490,7 @@ export function useSolana() {
   );
 
   const thaw = useCallback(
-    async (token: SssToken, accountAddress: string) => {
+    async (token: SssToken, walletAddress: string) => {
       if (!connected || !wallet || !publicKey) {
         throw new Error("Wallet not connected");
       }
@@ -505,12 +501,21 @@ export function useSolana() {
       try {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
-        const accountPubkey = new PublicKey(accountAddress);
+        const walletPubkey = new PublicKey(walletAddress);
 
         const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
         const [configPubkey] = await PublicKey.findProgramAddress(
           [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
           new PublicKey(PROGRAM_ID)
+        );
+
+        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
+          await import("@solana/spl-token");
+        const accountPubkey = await getAssociatedTokenAddress(
+          mintPubkey,
+          walletPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
         );
 
         const discriminator = Buffer.from([
@@ -576,6 +581,11 @@ export function useSolana() {
           time: string;
         }[] = [];
 
+        const accountActions: Map<
+          string,
+          { action: "freeze" | "thaw"; time: string; txn: string }
+        > = new Map();
+
         for (const sig of signatures) {
           try {
             const tx = await connection.getParsedTransaction(sig.signature, {
@@ -593,14 +603,12 @@ export function useSolana() {
 
                   const discriminator = dataBuffer.slice(0, 8).toString("hex");
 
-                  if (discriminator === "73d84fd5d5a9b823") {
+                  if (discriminator === "ddd63b1df63277ce") {
                     const account = new PublicKey(
                       dataBuffer.slice(8, 40)
                     ).toString();
 
-                    history.push({
-                      account: `${account.slice(0, 4)}...${account.slice(-4)}`,
-                      accountFull: account,
+                    accountActions.set(account, {
                       action: "freeze",
                       txn: `${sig.signature.slice(
                         0,
@@ -608,14 +616,12 @@ export function useSolana() {
                       )}...${sig.signature.slice(-4)}`,
                       time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                     });
-                  } else if (discriminator === "73984fd5d5a9b823") {
+                  } else if (discriminator === "313f496981be2877") {
                     const account = new PublicKey(
                       dataBuffer.slice(8, 40)
                     ).toString();
 
-                    history.push({
-                      account: `${account.slice(0, 4)}...${account.slice(-4)}`,
-                      accountFull: account,
+                    accountActions.set(account, {
                       action: "thaw",
                       txn: `${sig.signature.slice(
                         0,
@@ -631,6 +637,18 @@ export function useSolana() {
             }
           } catch {
             // Skip failed transactions
+          }
+        }
+
+        for (const [account, data] of accountActions) {
+          if (data.action === "freeze") {
+            history.push({
+              account: `${account.slice(0, 4)}...${account.slice(-4)}`,
+              accountFull: account,
+              action: "freeze",
+              txn: data.txn,
+              time: data.time,
+            });
           }
         }
 
@@ -821,8 +839,6 @@ export function useSolana() {
             });
             if (!tx?.meta?.logMessages) continue;
 
-            console.log("Tx logs:", tx.meta.logMessages);
-
             for (const log of tx.meta.logMessages) {
               if (log.includes("Program data:")) {
                 try {
@@ -835,7 +851,6 @@ export function useSolana() {
                   );
 
                   const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                  console.log("Event discriminator:", discriminator);
 
                   if (discriminator === "cfd480c2af364018") {
                     const mint = new PublicKey(
