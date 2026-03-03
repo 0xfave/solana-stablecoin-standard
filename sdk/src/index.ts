@@ -391,30 +391,25 @@ export class ComplianceClient {
     const config = this.stablecoin.configAddress;
     const [blacklist] = await PublicKey.findProgramAddress(
       [Buffer.from("blacklist"), config.toBuffer(), address.toBuffer()],
-      this.stablecoin.mintAddress
+      new PublicKey(PROGRAM_ID)
     );
 
-    const reasonBytes = Buffer.alloc(200);
-    reasonBytes.write(reason.slice(0, 200));
+    const reasonBytes = Buffer.from(reason.slice(0, 200));
+    const reasonLengthBuffer = Buffer.alloc(4);
+    reasonLengthBuffer.writeUInt32LE(reasonBytes.length, 0);
+
+    const discriminator = Buffer.from([0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4]);
 
     const ix = new TransactionInstruction({
       programId: new PublicKey(PROGRAM_ID),
       keys: [
-        { pubkey: config, isWritable: false, isSigner: false },
         { pubkey: blacklist, isWritable: true, isSigner: false },
+        { pubkey: config, isWritable: true, isSigner: false },
+        { pubkey: this.stablecoin.authorityAddress, isWritable: true, isSigner: true },
         { pubkey: address, isWritable: false, isSigner: false },
-        {
-          pubkey: this.stablecoin.authorityAddress,
-          isWritable: false,
-          isSigner: true,
-        },
-        {
-          pubkey: new PublicKey(SYSTEM_PROGRAM_ID),
-          isWritable: false,
-          isSigner: false,
-        },
+        { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
       ],
-      data: Buffer.concat([Buffer.from([6]), reasonBytes]),
+      data: Buffer.concat([discriminator, reasonLengthBuffer, reasonBytes]),
     });
 
     const tx = new Transaction().add(ix);

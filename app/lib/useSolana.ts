@@ -547,8 +547,6 @@ export function useSolana() {
           signed.serialize()
         );
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Account thawed! Signature:", signature);
-
         return signature;
       } catch (err) {
         const errorMsg =
@@ -560,6 +558,432 @@ export function useSolana() {
       }
     },
     [connected, wallet, publicKey, connection]
+  );
+
+  const addBlacklister = useCallback(
+    async (token: SssToken, blacklisterAddress: string) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const blacklisterPubkey = new PublicKey(blacklisterAddress);
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const discriminator = Buffer.from([55, 173, 233, 56, 217, 53, 67, 172]);
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+          ],
+          data: Buffer.concat([discriminator, blacklisterPubkey.toBuffer()]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Blacklister added! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to add blacklister";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
+  const blacklistAdd = useCallback(
+    async (token: SssToken, address: string, reason: string) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const targetPubkey = new PublicKey(address);
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const [blacklistEntry] = await PublicKey.findProgramAddress(
+          [
+            Buffer.from("blacklist"),
+            configPubkey.toBuffer(),
+            targetPubkey.toBuffer(),
+          ],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const discriminator = getInstructionDiscriminator("blacklist_add");
+
+        const reasonBuffer = Buffer.from(reason);
+        const reasonLengthBuffer = Buffer.alloc(4);
+        reasonLengthBuffer.writeUInt32LE(reasonBuffer.length, 0);
+
+        const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: blacklistEntry, isWritable: true, isSigner: false },
+            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: true, isSigner: true },
+            { pubkey: targetPubkey, isWritable: false, isSigner: false },
+            { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
+          ],
+          data: Buffer.concat([
+            discriminator,
+            reasonLengthBuffer,
+            reasonBuffer,
+          ]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Address blacklisted! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to add to blacklist";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
+  const blacklistRemove = useCallback(
+    async (token: SssToken, address: string) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const targetPubkey = new PublicKey(address);
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const [blacklistEntry] = await PublicKey.findProgramAddress(
+          [
+            Buffer.from("blacklist"),
+            configPubkey.toBuffer(),
+            targetPubkey.toBuffer(),
+          ],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const discriminator = getInstructionDiscriminator("blacklist_remove");
+        console.log("blacklist_remove discriminator:", discriminator.toString("hex"));
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: blacklistEntry, isWritable: true, isSigner: false },
+            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            { pubkey: targetPubkey, isWritable: false, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: true, isSigner: false },
+          ],
+          data: discriminator,
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Address removed from blacklist! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error
+            ? err.message
+            : "Failed to remove from blacklist";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
+  const fetchBlacklistHistory = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+
+      try {
+        const configPubkey = new PublicKey(token.config);
+
+        const signatures = await connection.getSignaturesForAddress(
+          configPubkey,
+          { limit: 20 }
+        );
+
+        const history: {
+          address: string;
+          addressFull: string;
+          action: "add" | "remove";
+          reason?: string;
+          txn: string;
+          time: string;
+        }[] = [];
+
+        const accountActions: Map<
+          string,
+          {
+            action: "add" | "remove";
+            reason?: string;
+            time: string;
+            txn: string;
+          }
+          > = new Map();
+
+        const blacklistAddDiscriminator = "03c44e886fc5bc72";
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (log.includes("Program data:")) {
+                try {
+                  const dataBase64 = log.replace("Program data: ", "");
+                  const dataBuffer = Buffer.from(dataBase64, "base64");
+
+                  if (dataBuffer.length < 8) continue;
+
+                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+
+                  if (discriminator === blacklistAddDiscriminator) {
+                    let reason;
+                    if (dataBuffer.length > 8) {
+                      const reasonLength = dataBuffer.readUInt32LE(8);
+                      const reasonBuffer = dataBuffer.slice(
+                        12,
+                        12 + reasonLength
+                      );
+                      reason = reasonBuffer.toString("utf8");
+                    }
+
+                    let address = "";
+                    if (tx.transaction.message.accountKeys) {
+                      const accounts = tx.transaction.message.accountKeys;
+                      const accountKeys = Array.isArray(accounts) 
+                        ? accounts 
+                        : Object.values(accounts);
+                      if (accountKeys.length > 5) {
+                        const targetAcc = accountKeys[5];
+                        address = typeof targetAcc === 'string' ? targetAcc : targetAcc.pubkey;
+                      }
+                    }
+
+                    if (address) {
+                      accountActions.set(address, {
+                        action: "add",
+                        reason,
+                        txn: `${sig.signature.slice(
+                          0,
+                          4
+                        )}...${sig.signature.slice(-4)}`,
+                        time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                      });
+                    }
+                  }
+                } catch (e) {
+                  console.error("Error parsing blacklist event:", e);
+                }
+              }
+            }
+          } catch {
+            // Skip failed transactions
+          }
+        }
+
+        for (const [address, data] of accountActions) {
+          if (data.action === "add") {
+            history.push({
+              address: `${address.slice(0, 4)}...${address.slice(-4)}`,
+              addressFull: address,
+              action: "add",
+              reason: data.reason,
+              txn: data.txn,
+              time: data.time,
+            });
+          }
+        }
+
+        return history;
+      } catch (err) {
+        console.error("Error fetching blacklist history:", err);
+        return [];
+      }
+    },
+    [connected, connection]
+  );
+
+  const fetchBlacklistEntries = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+
+      try {
+        const configPubkey = new PublicKey(token.config);
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+
+        const signatures = await connection.getSignaturesForAddress(
+          configPubkey,
+          { limit: 50 }
+        );
+
+        const entries: Map<string, { target: string; reason?: string }> = new Map();
+        const blacklistAddDiscriminator = "03c44e886fc5bc72";
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (log.includes("Program data:")) {
+                try {
+                  const dataBase64 = log.replace("Program data: ", "");
+                  const dataBuffer = Buffer.from(dataBase64, "base64");
+
+                  if (dataBuffer.length < 8) continue;
+
+                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                  console.log("Found discriminator:", discriminator);
+
+                  if (discriminator === blacklistAddDiscriminator) {
+                    if (tx.transaction.message.accountKeys) {
+                      const accounts = tx.transaction.message.accountKeys;
+                      const accountKeys = Array.isArray(accounts) 
+                        ? accounts 
+                        : Object.values(accounts);
+                      
+                      let reason;
+                      if (dataBuffer.length > 8) {
+                        const reasonLength = dataBuffer.readUInt32LE(8);
+                        if (reasonLength > 0 && reasonLength < 200 && dataBuffer.length > 12) {
+                          const reasonBuffer = dataBuffer.slice(12, 12 + reasonLength);
+                          reason = reasonBuffer.toString("utf8");
+                        }
+                      }
+
+                      if (accountKeys.length > 4) {
+                        const targetAcc = accountKeys[4];
+                        const target = typeof targetAcc === 'string' ? targetAcc : targetAcc.pubkey;
+                        const targetStr = target.toString();
+                        entries.set(targetStr, { target: targetStr, reason });
+                      }
+                    }
+                  }
+                } catch (e) {
+                  // Skip
+                }
+              }
+            }
+          } catch {
+            // Skip
+          }
+        }
+
+        const result: {
+          address: string;
+          addressFull: string;
+          reason?: string;
+          txn: string;
+          time: string;
+        }[] = [];
+
+        for (const entry of entries.values()) {
+          try {
+            const [blacklistPDA] = await PublicKey.findProgramAddress(
+              [Buffer.from("blacklist"), configPubkey.toBuffer(), new PublicKey(entry.target).toBuffer()],
+              new PublicKey(PROGRAM_ID)
+            );
+            
+            const accountInfo = await connection.getAccountInfo(blacklistPDA);
+            if (accountInfo && accountInfo.data.length > 0) {
+              result.push({
+                address: `${entry.target.slice(0, 4)}...${entry.target.slice(-4)}`,
+                addressFull: entry.target,
+                reason: entry.reason,
+                txn: "",
+                time: "",
+              });
+            }
+          } catch (e) {
+            // Skip - account doesn't exist
+          }
+        }
+
+        return result;
+      } catch (err) {
+        console.error("Error fetching blacklist entries:", err);
+        return [];
+      }
+    },
+    [connected, connection]
   );
 
   const fetchFreezeHistory = useCallback(
@@ -924,11 +1348,16 @@ export function useSolana() {
     createToken,
     addMinter,
     addFreezer,
+    addBlacklister,
+    blacklistAdd,
+    blacklistRemove,
     freeze,
     thaw,
     mint,
     fetchMintHistory,
     fetchFreezeHistory,
+    fetchBlacklistHistory,
+    fetchBlacklistEntries,
     addToken,
     isLoading,
     error,

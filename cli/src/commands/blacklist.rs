@@ -59,6 +59,19 @@ pub async fn execute(
             println!("Config:    {}", config);
             println!("Blacklist: {}", blacklist);
 
+            // Check if already blacklisted
+            let account_result = rpc.get_account(&blacklist.to_string()).await;
+            if let Ok(response) = account_result {
+                if let Some(result) = response.get("result") {
+                    if let Some(value) = result.get("value") {
+                        if !value.is_null() {
+                            println!("Address {} is already blacklisted!", address);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
             // ✅ Anchor discriminator + Borsh-encoded String reason
             let mut data = discriminator("blacklist_add").to_vec();
             data.extend_from_slice(&borsh_string(&reason_str));
@@ -96,6 +109,24 @@ pub async fn execute(
 
             println!("Config:    {}", config);
             println!("Blacklist: {}", blacklist);
+
+            // Check if actually blacklisted
+            let account_result = rpc.get_account(&blacklist.to_string()).await;
+            let mut is_blacklisted = false;
+            if let Ok(response) = account_result {
+                if let Some(result) = response.get("result") {
+                    if let Some(value) = result.get("value") {
+                        if !value.is_null() {
+                            is_blacklisted = true;
+                        }
+                    }
+                }
+            }
+
+            if !is_blacklisted {
+                println!("Address {} is not blacklisted!", address);
+                return Ok(());
+            }
 
             // ✅ Anchor discriminator, no extra args
             let data = discriminator("blacklist_remove").to_vec();
@@ -147,25 +178,19 @@ pub async fn execute(
                     println!("  discriminator: {:?}", &decoded[..8]);
         
                     // BlacklistEntry Borsh layout (after 8-byte discriminator):
-                    //   [8..40]  target  (Pubkey)
+                    //   [8..40]  blacklister (Pubkey)
                     //   [40..]   reason  (String: 4-byte LE len + bytes)
-                    //   next     blacklisted (bool)
-                    //   next     timestamp   (i64)
+                    //   next     timestamp (i64)
         
-                    if decoded.len() > 40 {
+                    if decoded.len() > 44 {
                         let reason_len = u32::from_le_bytes(
                             decoded[40..44].try_into()?
                         ) as usize;
-                        let reason_end = 44 + reason_len;
-        
-                        if decoded.len() > reason_end {
+                        
+                        if reason_len > 0 && decoded.len() > 44 + reason_len {
+                            let reason_end = 44 + reason_len;
                             let reason = String::from_utf8_lossy(&decoded[44..reason_end]);
                             println!("  reason: {}", reason);
-        
-                            if decoded.len() > reason_end {
-                                let blacklisted = decoded[reason_end] != 0;
-                                println!("  blacklisted: {}", blacklisted);
-                            }
                         }
                     }
                 }
