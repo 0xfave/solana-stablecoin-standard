@@ -396,7 +396,7 @@ export function useSolana() {
           data: Buffer.concat([discriminator, freezerPubkey.toBuffer()]),
         });
 
-        let tx = new Transaction().add(ix);
+        const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
@@ -418,6 +418,229 @@ export function useSolana() {
       }
     },
     [connected, wallet, publicKey, connection]
+  );
+
+  const freeze = useCallback(
+    async (token: SssToken, walletAddress: string) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const walletPubkey = new PublicKey(walletAddress);
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
+          await import("@solana/spl-token");
+        const accountPubkey = await getAssociatedTokenAddress(
+          mintPubkey,
+          walletPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const discriminator = Buffer.from([
+          253, 75, 82, 133, 167, 238, 43, 130,
+        ]);
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: accountPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: new PublicKey(TOKEN_2022_PROGRAM_ID),
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: discriminator,
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Account frozen! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to freeze account";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
+  const thaw = useCallback(
+    async (token: SssToken, accountAddress: string) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const accountPubkey = new PublicKey(accountAddress);
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const discriminator = Buffer.from([
+          115, 152, 79, 213, 213, 169, 184, 35,
+        ]);
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: accountPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: new PublicKey(TOKEN_2022_PROGRAM_ID),
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: discriminator,
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Account thawed! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to thaw account";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
+  const fetchFreezeHistory = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+
+      try {
+        const mintPubkey = new PublicKey(token.mint);
+        const signatures = await connection.getSignaturesForAddress(
+          mintPubkey,
+          { limit: 20 }
+        );
+
+        const history: {
+          account: string;
+          accountFull: string;
+          action: "freeze" | "thaw";
+          txn: string;
+          time: string;
+        }[] = [];
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (log.includes("Program data:")) {
+                try {
+                  const dataBase64 = log.replace("Program data: ", "");
+                  const dataBuffer = Buffer.from(dataBase64, "base64");
+
+                  if (dataBuffer.length < 8) continue;
+
+                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+
+                  if (discriminator === "73d84fd5d5a9b823") {
+                    const account = new PublicKey(
+                      dataBuffer.slice(8, 40)
+                    ).toString();
+
+                    history.push({
+                      account: `${account.slice(0, 4)}...${account.slice(-4)}`,
+                      accountFull: account,
+                      action: "freeze",
+                      txn: `${sig.signature.slice(
+                        0,
+                        4
+                      )}...${sig.signature.slice(-4)}`,
+                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                    });
+                  } else if (discriminator === "73984fd5d5a9b823") {
+                    const account = new PublicKey(
+                      dataBuffer.slice(8, 40)
+                    ).toString();
+
+                    history.push({
+                      account: `${account.slice(0, 4)}...${account.slice(-4)}`,
+                      accountFull: account,
+                      action: "thaw",
+                      txn: `${sig.signature.slice(
+                        0,
+                        4
+                      )}...${sig.signature.slice(-4)}`,
+                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                    });
+                  }
+                } catch (e) {
+                  console.error("Error parsing freeze event:", e);
+                }
+              }
+            }
+          } catch {
+            // Skip failed transactions
+          }
+        }
+
+        return history;
+      } catch (err) {
+        console.error("Error fetching freeze history:", err);
+        return [];
+      }
+    },
+    [connected, connection]
   );
 
   const sendTransaction = useCallback(
@@ -686,8 +909,11 @@ export function useSolana() {
     createToken,
     addMinter,
     addFreezer,
+    freeze,
+    thaw,
     mint,
     fetchMintHistory,
+    fetchFreezeHistory,
     addToken,
     isLoading,
     error,
