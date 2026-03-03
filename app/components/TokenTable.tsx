@@ -12,6 +12,8 @@ export default function TokenTable() {
     createToken,
     addMinter,
     addFreezer,
+    selectedToken,
+    setSelectedToken,
   } = useSolana();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -26,7 +28,6 @@ export default function TokenTable() {
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
 
   const [showAddMinterModal, setShowAddMinterModal] = useState(false);
-  const [selectedToken, setSelectedToken] = useState<SssToken | null>(null);
   const [minterAddress, setMinterAddress] = useState("");
   const [addingMinter, setAddingMinter] = useState(false);
 
@@ -238,8 +239,15 @@ export default function TokenTable() {
                       </button>
                     </td>
                     <td className="py-4 px-1">
-                      <button className="w-full text-[10px] bg-[#25d1f4]/20 text-[#25d1f4] border border-[#25d1f4]/40 py-1 hover:bg-[#25d1f4] hover:text-black transition-all uppercase">
-                        Select Token
+                      <button 
+                        onClick={() => setSelectedToken(token)}
+                        className={`w-full text-[10px] border py-1 transition-all uppercase ${
+                          selectedToken?.mint === token.mint
+                            ? "bg-[#25d1f4] text-black border-[#25d1f4]"
+                            : "bg-[#25d1f4]/20 text-[#25d1f4] border-[#25d1f4]/40 hover:bg-[#25d1f4] hover:text-black"
+                        }`}
+                      >
+                        {selectedToken?.mint === token.mint ? "Selected" : "Select"}
                       </button>
                     </td>
                     <td className="py-4 px-4 text-right">

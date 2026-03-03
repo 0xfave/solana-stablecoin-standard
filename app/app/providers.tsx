@@ -42,6 +42,7 @@ function WalletProviderInner({ children }: { children: ReactNode }) {
   const [wallet, setWallet] = useState<SolanaWallet | null>(null);
   const [connected, setConnected] = useState(false);
   const [publicKey, setPublicKey] = useState<string | null>(null);
+  const [selectedToken, setSelectedToken] = useState<SssToken | null>(null);
 
   useEffect(() => {
     const solWallet = getSolanaWallet();
@@ -77,7 +78,9 @@ function WalletProviderInner({ children }: { children: ReactNode }) {
 
   return (
     <WalletContext.Provider value={{ connected, publicKey, connectWallet, disconnectWallet, wallet }}>
-      {children}
+      <TokenContext.Provider value={{ selectedToken, setSelectedToken }}>
+        {children}
+      </TokenContext.Provider>
     </WalletContext.Provider>
   );
 }
@@ -104,4 +107,26 @@ export const WalletContext = React.createContext<WalletContextValue>({
   connectWallet: async () => {},
   disconnectWallet: async () => {},
   wallet: null,
+});
+
+interface SssToken {
+  mint: string;
+  config: string;
+  authority: string;
+  supply: string;
+  decimals: number;
+  name?: string;
+  symbol?: string;
+  paused: boolean;
+  preset: number;
+}
+
+interface TokenContextValue {
+  selectedToken: SssToken | null;
+  setSelectedToken: (token: SssToken | null) => void;
+}
+
+export const TokenContext = React.createContext<TokenContextValue>({
+  selectedToken: null,
+  setSelectedToken: () => {},
 });

@@ -225,7 +225,9 @@ export class SolanaStablecoin {
     const { recipient, amount, minter } = params;
 
     const amountBuffer = Buffer.alloc(8);
-    amountBuffer.writeBigUInt64BE(BigInt(amount));
+    const bigAmount = BigInt(amount);
+    amountBuffer.writeUInt32LE(Number(bigAmount & BigInt(0xffffffff), 0));
+    amountBuffer.writeUInt32LE(Number(bigAmount >> BigInt(32), 4));
 
     const ix = new TransactionInstruction({
       programId: this._programId,

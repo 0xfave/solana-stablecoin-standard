@@ -1,25 +1,43 @@
-const seized = [
-  { address: "0xdead...beef", amount: "1,500 SSS", txn: "0x921...aa2" },
-  { address: "0xcafe...babe", amount: "80.00 SSS", txn: "0x551...bb9" },
-];
+import { SssToken } from "@/lib/useSolana";
 
-export default function SeizeHistory() {
+interface SeizeHistoryProps {
+  token: SssToken | null;
+}
+
+export default function SeizeHistory({ token }: SeizeHistoryProps) {
+  const seized = token ? [
+    { address: `${token.mint.slice(0, 6)}...${token.mint.slice(-4)}`, amount: "1,500 SSS", txn: "0x921...aa2" },
+    { address: `${token.mint.slice(0, 6)}...${token.mint.slice(-4)}`, amount: "80.00 SSS", txn: "0x551...bb9" },
+  ] : [];
+
+  const tokenLabel = token ? (token.name || token.symbol || `${token.mint.slice(0, 8)}...${token.mint.slice(-4)}`) : "Select a token";
+
   return (
     <section className="osint-card flex flex-col h-[400px]">
       <div className="p-4 border-b border-white/10 flex justify-between items-center">
         <h3 className="text-xs font-bold uppercase tracking-widest text-[#25d1f4]">Seize History</h3>
-        <span className="text-[10px] font-mono opacity-50">#SZE-04</span>
+        <span className="text-[10px] font-mono opacity-50">{tokenLabel}</span>
       </div>
       <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-3">
-        {seized.map((item, i) => (
-          <div key={i} className="bg-[#141417] p-3 rounded border border-white/5">
-            <div className="flex justify-between items-start mb-2">
-              <span className="text-[10px] font-mono text-slate-400">{item.address}</span>
-              <span className="text-xs font-mono text-[#25d1f4]">{item.amount}</span>
-            </div>
-            <div className="text-[10px] opacity-30 font-mono">TXN: {item.txn}</div>
+        {!token ? (
+          <div className="text-center text-slate-500 text-sm py-8">
+            Select a token to view seize history
           </div>
-        ))}
+        ) : seized.length === 0 ? (
+          <div className="text-center text-slate-500 text-sm py-8">
+            No seized funds for this token
+          </div>
+        ) : (
+          seized.map((item, i) => (
+            <div key={i} className="bg-[#141417] p-3 rounded border border-white/5">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] font-mono text-slate-400">{item.address}</span>
+                <span className="text-xs font-mono text-[#25d1f4]">{item.amount}</span>
+              </div>
+              <div className="text-[10px] opacity-30 font-mono">TXN: {item.txn}</div>
+            </div>
+          ))
+        )}
       </div>
       <div className="p-3 border-t border-white/10">
         <button className="w-full py-2 bg-white/5 text-[10px] uppercase font-bold hover:bg-[#25d1f4] hover:text-black transition-colors">

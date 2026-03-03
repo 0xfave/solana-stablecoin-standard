@@ -34,10 +34,10 @@ pub mod solana_stablecoin_standard {
         config.freezer = authority_key;
         config.pauser = authority_key;
         config.blacklister = authority_key;
-    
+
         let config_key = ctx.accounts.config.key();
         let mint_key = ctx.accounts.mint.key();
-    
+
         // Transfer mint authority to config PDA
         let set_mint_authority_ix = spl_token_2022::instruction::set_authority(
             &ctx.accounts.token_program.key(),
@@ -55,7 +55,7 @@ pub mod solana_stablecoin_standard {
                 ctx.accounts.authority.to_account_info(),
             ],
         )?;
-    
+
         // Transfer freeze authority to config PDA
         let set_freeze_authority_ix = spl_token_2022::instruction::set_authority(
             &ctx.accounts.token_program.key(),
@@ -73,14 +73,14 @@ pub mod solana_stablecoin_standard {
                 ctx.accounts.authority.to_account_info(),
             ],
         )?;
-    
+
         emit!(ConfigInitialized {
             config: ctx.accounts.config.key(),
             authority: authority_key,
             mint: mint_key,
             preset,
         });
-    
+
         Ok(())
     }
 
@@ -268,23 +268,21 @@ pub mod solana_stablecoin_standard {
     pub fn freeze_account(ctx: Context<FreezeAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
         require_keys_eq!(ctx.accounts.freezer.key(), config.freezer, StablecoinError::UnauthorizedFreezer);
-    
+
         let mint_key = ctx.accounts.mint.key();
         let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
         let signer_seeds = &[&seeds[..]];
-    
-        anchor_spl::token_interface::freeze_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token_interface::FreezeAccount {
-                    account: ctx.accounts.account.to_account_info(),
-                    mint: ctx.accounts.mint.to_account_info(),
-                    authority: ctx.accounts.config.to_account_info(),
-                },
-                signer_seeds,
-            )
-        )?;
-    
+
+        anchor_spl::token_interface::freeze_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token_interface::FreezeAccount {
+                account: ctx.accounts.account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         emit!(AccountFrozen {
             account: ctx.accounts.account.key(),
             mint: ctx.accounts.mint.key(),
@@ -292,27 +290,25 @@ pub mod solana_stablecoin_standard {
         });
         Ok(())
     }
-    
+
     pub fn thaw_account(ctx: Context<ThawAccount>) -> Result<()> {
         let config = &ctx.accounts.config;
         require_keys_eq!(ctx.accounts.freezer.key(), config.freezer, StablecoinError::UnauthorizedFreezer);
-    
+
         let mint_key = ctx.accounts.mint.key();
         let seeds = &[b"stablecoin", mint_key.as_ref(), &[config.bump]];
         let signer_seeds = &[&seeds[..]];
-    
-        anchor_spl::token_interface::thaw_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                anchor_spl::token_interface::ThawAccount {
-                    account: ctx.accounts.account.to_account_info(),
-                    mint: ctx.accounts.mint.to_account_info(),
-                    authority: ctx.accounts.config.to_account_info(),
-                },
-                signer_seeds,
-            )
-        )?;
-    
+
+        anchor_spl::token_interface::thaw_account(CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            anchor_spl::token_interface::ThawAccount {
+                account: ctx.accounts.account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
+            },
+            signer_seeds,
+        ))?;
+
         emit!(AccountThawed {
             account: ctx.accounts.account.key(),
             mint: ctx.accounts.mint.key(),
@@ -401,7 +397,7 @@ pub mod solana_stablecoin_standard {
         msg!("ExtraAccountMetaList initialized for mint: {}", ctx.accounts.mint.key());
         Ok(())
     }
-    
+
     pub fn propose_master_authority(ctx: Context<ProposeMasterAuthority>, new_authority: Pubkey) -> Result<()> {
         let config = &mut ctx.accounts.config;
         require_keys_eq!(ctx.accounts.authority.key(), config.master_authority, StablecoinError::Unauthorized);
@@ -409,7 +405,7 @@ pub mod solana_stablecoin_standard {
         emit!(MasterAuthorityProposed { new_authority });
         Ok(())
     }
-    
+
     pub fn accept_master_authority(ctx: Context<AcceptMasterAuthority>) -> Result<()> {
         let config = &mut ctx.accounts.config;
         require!(
