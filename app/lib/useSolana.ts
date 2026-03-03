@@ -534,7 +534,9 @@ export function useSolana() {
           ).blockhash;
 
           const signed = await wallet.signTransaction(tx);
-          const sig = await connection.sendRawTransaction(signed.serialize());
+          const sig = await connection.sendRawTransaction(signed.serialize(), {
+            skipPreflight: true,
+          });
           await connection.confirmTransaction(sig, "confirmed");
           console.log("ATA created!");
         }
@@ -596,30 +598,51 @@ export function useSolana() {
             });
             if (!tx?.meta?.logMessages) continue;
 
+            console.log("Tx logs:", tx.meta.logMessages);
+
             for (const log of tx.meta.logMessages) {
-              if (log.includes("TokensMinted")) {
-                const parts = log.split(":");
-                if (parts.length > 1) {
-                  try {
-                    const data = JSON.parse(parts[parts.length - 1].trim());
-                    const amount =
-                      (data.amount || 0) / Math.pow(10, token.decimals);
-                    const to = data.to || "";
+              if (log.includes("Program data:")) {
+                try {
+                  const dataBase64 = log.replace("Program data: ", "");
+                  const dataBuffer = Buffer.from(dataBase64, "base64");
+                  const dataView = new DataView(
+                    dataBuffer.buffer,
+                    dataBuffer.byteOffset,
+                    dataBuffer.byteLength
+                  );
+
+                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                  console.log("Event discriminator:", discriminator);
+
+                  if (discriminator === "cfd480c2af364018") {
+                    const mint = new PublicKey(
+                      dataBuffer.slice(8, 40)
+                    ).toString();
+                    const to = new PublicKey(
+                      dataBuffer.slice(40, 72)
+                    ).toString();
+                    const amount = dataView.getBigUint64(72, true);
+                    const minter = new PublicKey(
+                      dataBuffer.slice(80, 112)
+                    ).toString();
+
+                    const amountFormatted =
+                      Number(amount) / Math.pow(10, token.decimals);
                     history.push({
-                      amount: `+${amount.toLocaleString(undefined, {
+                      amount: `+${amountFormatted.toLocaleString(undefined, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}`,
-                      to: to ? `${to.slice(0, 4)}...${to.slice(-4)}` : "",
+                      to: `${to.slice(0, 4)}...${to.slice(-4)}`,
                       txn: `${sig.signature.slice(
                         0,
                         4
                       )}...${sig.signature.slice(-4)}`,
                       time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                     });
-                  } catch {
-                    // Skip if can't parse
                   }
+                } catch (e) {
+                  console.error("Error parsing event:", e);
                 }
               }
             }
