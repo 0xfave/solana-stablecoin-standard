@@ -75,13 +75,15 @@ export class SolanaStablecoin {
   private _authority: PublicKey;
   private _preset: Preset;
   private _programId: PublicKey;
+  private _decimals: number = 9;
 
   private constructor(
     connection: Connection,
     mint: PublicKey,
     config: PublicKey,
     authority: PublicKey,
-    preset: Preset
+    preset: Preset,
+    decimals: number = 9
   ) {
     this._connection = connection;
     this._mint = mint;
@@ -89,6 +91,7 @@ export class SolanaStablecoin {
     this._authority = authority;
     this._preset = preset;
     this._programId = new PublicKey(PROGRAM_ID);
+    this._decimals = decimals;
   }
 
   static async create(
@@ -186,12 +189,22 @@ export class SolanaStablecoin {
     const preset = data[68];
     const paused = data[69] === 1;
 
+    const mintInfo = await connection.getParsedAccountInfo(mint);
+    let decimals = 9;
+    if (mintInfo.value?.data) {
+      const mintData = mintInfo.value.data as {
+        parsed: { info: { decimals: number } };
+      };
+      decimals = mintData.parsed?.info?.decimals ?? 9;
+    }
+
     return new SolanaStablecoin(
       connection,
       mint,
       config,
       masterAuthority,
-      preset as Preset
+      preset as Preset,
+      decimals
     );
   }
 
@@ -205,6 +218,10 @@ export class SolanaStablecoin {
 
   get authorityAddress(): PublicKey {
     return this._authority;
+  }
+
+  get decimals(): number {
+    return this._decimals;
   }
 
   get isCompliant(): boolean {
@@ -225,9 +242,8 @@ export class SolanaStablecoin {
     const { recipient, amount, minter } = params;
 
     const amountBuffer = Buffer.alloc(8);
-    const bigAmount = BigInt(amount);
-    amountBuffer.writeUInt32LE(Number(bigAmount & BigInt(0xffffffff), 0));
-    amountBuffer.writeUInt32LE(Number(bigAmount >> BigInt(32), 4));
+    const view = new DataView(amountBuffer.buffer, amountBuffer.byteOffset, 8);
+    view.setBigUint64(0, BigInt(amount), true);
 
     const ix = new TransactionInstruction({
       programId: this._programId,

@@ -38,7 +38,7 @@ export default function TokenTable() {
 
   const formatSupply = (supply: string, decimals: number) => {
     try {
-      const num = parseFloat(supply);
+      const num = Number(supply) / Math.pow(10, decimals);
       return num.toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,

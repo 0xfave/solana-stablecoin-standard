@@ -762,6 +762,90 @@ export function useSolana() {
     [connected, wallet, publicKey, connection]
   );
 
+  const seize = useCallback(
+    async (token: SssToken, fromWallet: string, toWallet: string, amount: number) => {
+      if (!connected || !wallet || !publicKey) {
+        throw new Error("Wallet not connected");
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const fromWalletPubkey = new PublicKey(fromWallet);
+        const toWalletPubkey = new PublicKey(toWallet);
+
+        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } = await import("@solana/spl-token");
+
+        const fromAta = await getAssociatedTokenAddress(mintPubkey, fromWalletPubkey, false, TOKEN_2022_PROGRAM_ID);
+        const toAta = await getAssociatedTokenAddress(mintPubkey, toWalletPubkey, false, TOKEN_2022_PROGRAM_ID);
+
+        const fromAtaInfo = await connection.getAccountInfo(fromAta);
+        if (!fromAtaInfo) {
+          throw new Error("Source token account does not exist");
+        }
+
+        const toAtaInfo = await connection.getAccountInfo(toAta);
+        if (!toAtaInfo) {
+          throw new Error("Destination token account does not exist. Please create it first.");
+        }
+
+        console.log("From ATA owner:", fromAtaInfo.owner.toString());
+
+        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+        const [configPubkey] = await PublicKey.findProgramAddress(
+          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const [fromBlacklist] = await PublicKey.findProgramAddress(
+          [Buffer.from("blacklist"), configPubkey.toBuffer(), fromWalletPubkey.toBuffer()],
+          new PublicKey(PROGRAM_ID)
+        );
+
+        const discriminator = getInstructionDiscriminator("seize");
+
+        const amountBuffer = Buffer.alloc(8);
+        const view = new DataView(amountBuffer.buffer, amountBuffer.byteOffset, 8);
+        view.setBigUint64(0, BigInt(amount), true);
+
+        const ix = new TransactionInstruction({
+          programId: new PublicKey(PROGRAM_ID),
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: fromAta, isWritable: true, isSigner: false },
+            { pubkey: toAta, isWritable: true, isSigner: false },
+            { pubkey: fromBlacklist, isWritable: false, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            { pubkey: TOKEN_2022_PROGRAM_ID, isWritable: false, isSigner: false },
+          ],
+          data: Buffer.concat([discriminator, amountBuffer]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(signed.serialize());
+        await connection.confirmTransaction(signature, "confirmed");
+        console.log("Tokens seized! Signature:", signature);
+
+        return signature;
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Failed to seize tokens";
+        setError(errorMsg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [connected, wallet, publicKey, connection]
+  );
+
   const fetchBlacklistHistory = useCallback(
     async (token: SssToken) => {
       if (!connected) return [];
@@ -1085,6 +1169,107 @@ export function useSolana() {
     [connected, connection]
   );
 
+  const fetchSeizeHistory = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+
+      try {
+        const mintPubkey = new PublicKey(token.mint);
+        const signatures = await connection.getSignaturesForAddress(
+          mintPubkey,
+          { limit: 20 }
+        );
+
+        const history: {
+          from: string;
+          fromFull: string;
+          to: string;
+          amount: string;
+          txn: string;
+          time: string;
+        }[] = [];
+
+        const seizeActions: Map<
+          string,
+          { from: string; to: string; amount: string; time: string; txn: string }
+        > = new Map();
+
+        const seizeDiscriminator = getInstructionDiscriminator("seize").toString("hex");
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (log.includes("Program data:")) {
+                try {
+                  const dataBase64 = log.replace("Program data: ", "");
+                  const dataBuffer = Buffer.from(dataBase64, "base64");
+
+                  if (dataBuffer.length < 8) continue;
+
+                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+
+                  if (discriminator === seizeDiscriminator) {
+                    const from = new PublicKey(
+                      dataBuffer.slice(8, 40)
+                    ).toString();
+                    const to = new PublicKey(
+                      dataBuffer.slice(40, 72)
+                    ).toString();
+                    const dataView = new DataView(
+                      dataBuffer.buffer,
+                      dataBuffer.byteOffset,
+                      dataBuffer.byteLength
+                    );
+                    const amount = dataView.getBigUint64(72, true);
+                    const amountFormatted =
+                      Number(amount) / Math.pow(10, token.decimals);
+
+                    seizeActions.set(from, {
+                      from,
+                      to,
+                      amount: amountFormatted.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      }),
+                      txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(-4)}`,
+                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                    });
+                  }
+                } catch (e) {
+                  console.error("Error parsing seize event:", e);
+                }
+              }
+            }
+          } catch {
+            // Skip failed transactions
+          }
+        }
+
+        for (const [from, data] of seizeActions) {
+          history.push({
+            from: `${from.slice(0, 4)}...${from.slice(-4)}`,
+            fromFull: from,
+            to: data.to,
+            amount: data.amount,
+            txn: data.txn,
+            time: data.time,
+          });
+        }
+
+        return history;
+      } catch (err) {
+        console.error("Error fetching seize history:", err);
+        return [];
+      }
+    },
+    [connected, connection]
+  );
+
   const sendTransaction = useCallback(
     async (transaction: unknown) => {
       if (!connected || !wallet) {
@@ -1206,9 +1391,11 @@ export function useSolana() {
           console.log("ATA created!");
         }
 
+        console.log("Minting - amount:", amount, "decimals:", token.decimals, "result:", amount * Math.pow(10, token.decimals));
         const amountInSmallest = Math.floor(
           amount * Math.pow(10, token.decimals)
         );
+        console.log("Amount in smallest units:", amountInSmallest);
 
         const signature = await stablecoin.mint({
           recipient: ata,
@@ -1351,11 +1538,13 @@ export function useSolana() {
     addBlacklister,
     blacklistAdd,
     blacklistRemove,
+    seize,
     freeze,
     thaw,
     mint,
     fetchMintHistory,
     fetchFreezeHistory,
+    fetchSeizeHistory,
     fetchBlacklistHistory,
     fetchBlacklistEntries,
     addToken,
