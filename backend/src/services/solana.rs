@@ -121,18 +121,43 @@ impl SolanaService {
         let mint = Keypair::new();
         let (config, _) = derive_config_pda(&mint.pubkey());
 
+        // Calculate mint space - larger if preset=1 (needs Permanent Delegate extension)
+        let mint_space = if preset == 1 {
+            // Include PermanentDelegate extension for SSS-2 (preset=1)
+            use spl_token_2022::extension::ExtensionType;
+            ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[
+                ExtensionType::PermanentDelegate,
+            ])
+            .unwrap()
+        } else {
+            82 // Basic mint size for preset=0
+        };
+
         let lamports = self
             .rpc
-            .get_minimum_balance_for_rent_exemption(82)
+            .get_minimum_balance_for_rent_exemption(mint_space)
             .map_err(|e| format!("Failed to get lamports: {}", e))?;
 
         let create_mint_ix = system_instruction::create_account(
             &self.payer.pubkey(),
             &mint.pubkey(),
             lamports,
-            82,
+            mint_space as u64,
             &self.token_program_id,
         );
+
+        // For preset=1 (SSS-2), add Permanent Delegate extension
+        let mut instructions = vec![create_mint_ix];
+
+        if preset == 1 {
+            let init_permanent_delegate_ix = spl_token_2022::instruction::initialize_permanent_delegate(
+                &self.token_program_id,
+                &mint.pubkey(),
+                &config,
+            )
+            .map_err(|e| format!("Failed to create permanent delegate ix: {}", e))?;
+            instructions.push(init_permanent_delegate_ix);
+        }
 
         let init_mint_ix = spl_token_2022::instruction::initialize_mint2(
             &self.token_program_id,
@@ -142,14 +167,16 @@ impl SolanaService {
             decimals,
         )
         .map_err(|e| format!("Failed to create init mint ix: {}", e))?;
+        instructions.push(init_mint_ix);
 
         let init_program_ix = self.create_initialize_instruction(preset, supply_cap, decimals, &mint.pubkey(), &config);
+        instructions.push(init_program_ix);
 
         let recent_blockhash =
             self.rpc.get_latest_blockhash().map_err(|e| format!("Failed to get blockhash: {}", e))?;
 
-        let mut tx =
-            Transaction::new_with_payer(&[create_mint_ix, init_mint_ix, init_program_ix], Some(&self.payer.pubkey()));
+        let tx =
+            Transaction::new_with_payer(&instructions, Some(&self.payer.pubkey()));
         tx.sign(&[&self.payer, &mint], recent_blockhash);
 
         match self.rpc.send_and_confirm_transaction_with_spinner(&tx) {

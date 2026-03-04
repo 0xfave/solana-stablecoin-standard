@@ -1,7 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Presets = exports.ComplianceClient = exports.SolanaStablecoin = exports.PRESET = void 0;
+exports.getInstructionDiscriminator = getInstructionDiscriminator;
 const web3_js_1 = require("@solana/web3.js");
+const spl_token_1 = require("@solana/spl-token");
 const crypto_1 = require("crypto");
 exports.PRESET = {
     SSS_1: 0,
@@ -15,27 +17,47 @@ const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
 const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 class SolanaStablecoin {
-    constructor(connection, mint, config, authority, preset) {
+    constructor(connection, mint, config, authority, preset, decimals = 9) {
+        this._decimals = 9;
         this._connection = connection;
         this._mint = mint;
         this._config = config;
         this._authority = authority;
         this._preset = preset;
         this._programId = new web3_js_1.PublicKey(PROGRAM_ID);
+        this._decimals = decimals;
     }
     static async create(connection, params) {
         const { preset, authority, decimals, supplyCap } = params;
+        console.log("SDK create() called with preset:", preset);
+        console.log("PRESET.SSS_2 value:", exports.PRESET.SSS_2);
+        console.log("Is SSS-2?", preset === exports.PRESET.SSS_2);
+        console.log("Extensions:", preset === exports.PRESET.SSS_2 ? [spl_token_1.ExtensionType.PermanentDelegate] : []);
         const mintKeypair = web3_js_1.Keypair.generate();
         const [config] = await web3_js_1.PublicKey.findProgramAddress([Buffer.from("stablecoin"), mintKeypair.publicKey.toBuffer()], new web3_js_1.PublicKey(PROGRAM_ID));
         const tx = new web3_js_1.Transaction();
-        const lamports = await connection.getMinimumBalanceForRentExemption(82);
+        // Calculate mint space - larger if preset=1 (SSS-2) needs Permanent Delegate extension
+        const extensions = preset === exports.PRESET.SSS_2
+            ? [spl_token_1.ExtensionType.PermanentDelegate]
+            : [];
+        const mintSpace = (0, spl_token_1.getMintLen)(extensions);
+        const lamports = await connection.getMinimumBalanceForRentExemption(mintSpace);
         tx.add(web3_js_1.SystemProgram.createAccount({
             fromPubkey: authority.publicKey,
             newAccountPubkey: mintKeypair.publicKey,
             lamports,
-            space: 82,
+            space: mintSpace,
             programId: new web3_js_1.PublicKey(TOKEN_2022_PROGRAM_ID),
         }));
+        // For preset=1 (SSS-2), add Permanent Delegate extension
+        if (preset === exports.PRESET.SSS_2) {
+            const initPermanentDelegateIx = (0, spl_token_1.createInitializePermanentDelegateInstruction)(mintKeypair.publicKey, config, new web3_js_1.PublicKey(TOKEN_2022_PROGRAM_ID));
+            tx.add(initPermanentDelegateIx);
+        }
+        const initMintIx = (0, spl_token_1.createInitializeMintInstruction)(mintKeypair.publicKey, decimals, authority.publicKey, // temporary mint authority (will be changed by program)
+        authority.publicKey, // temporary freeze authority
+        new web3_js_1.PublicKey(TOKEN_2022_PROGRAM_ID));
+        tx.add(initMintIx);
         const initIx = new web3_js_1.TransactionInstruction({
             programId: new web3_js_1.PublicKey(PROGRAM_ID),
             keys: [
@@ -88,7 +110,13 @@ class SolanaStablecoin {
         const mintAddr = new web3_js_1.PublicKey(data.slice(36, 68));
         const preset = data[68];
         const paused = data[69] === 1;
-        return new SolanaStablecoin(connection, mint, config, masterAuthority, preset);
+        const mintInfo = await connection.getParsedAccountInfo(mint);
+        let decimals = 9;
+        if (mintInfo.value?.data) {
+            const mintData = mintInfo.value.data;
+            decimals = mintData.parsed?.info?.decimals ?? 9;
+        }
+        return new SolanaStablecoin(connection, mint, config, masterAuthority, preset, decimals);
     }
     get mintAddress() {
         return this._mint;
@@ -98,6 +126,9 @@ class SolanaStablecoin {
     }
     get authorityAddress() {
         return this._authority;
+    }
+    get decimals() {
+        return this._decimals;
     }
     get isCompliant() {
         return this._preset === exports.PRESET.SSS_2;
@@ -112,7 +143,8 @@ class SolanaStablecoin {
     async mint(params) {
         const { recipient, amount, minter } = params;
         const amountBuffer = Buffer.alloc(8);
-        amountBuffer.writeBigUInt64BE(BigInt(amount));
+        const view = new DataView(amountBuffer.buffer, amountBuffer.byteOffset, 8);
+        view.setBigUint64(0, BigInt(amount), true);
         const ix = new web3_js_1.TransactionInstruction({
             programId: this._programId,
             keys: [
@@ -238,27 +270,21 @@ class ComplianceClient {
     }
     async blacklistAdd(address, reason) {
         const config = this.stablecoin.configAddress;
-        const [blacklist] = await web3_js_1.PublicKey.findProgramAddress([Buffer.from("blacklist"), config.toBuffer(), address.toBuffer()], this.stablecoin.mintAddress);
-        const reasonBytes = Buffer.alloc(200);
-        reasonBytes.write(reason.slice(0, 200));
+        const [blacklist] = await web3_js_1.PublicKey.findProgramAddress([Buffer.from("blacklist"), config.toBuffer(), address.toBuffer()], new web3_js_1.PublicKey(PROGRAM_ID));
+        const reasonBytes = Buffer.from(reason.slice(0, 200));
+        const reasonLengthBuffer = Buffer.alloc(4);
+        reasonLengthBuffer.writeUInt32LE(reasonBytes.length, 0);
+        const discriminator = Buffer.from([0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4]);
         const ix = new web3_js_1.TransactionInstruction({
             programId: new web3_js_1.PublicKey(PROGRAM_ID),
             keys: [
-                { pubkey: config, isWritable: false, isSigner: false },
                 { pubkey: blacklist, isWritable: true, isSigner: false },
+                { pubkey: config, isWritable: true, isSigner: false },
+                { pubkey: this.stablecoin.authorityAddress, isWritable: true, isSigner: true },
                 { pubkey: address, isWritable: false, isSigner: false },
-                {
-                    pubkey: this.stablecoin.authorityAddress,
-                    isWritable: false,
-                    isSigner: true,
-                },
-                {
-                    pubkey: new web3_js_1.PublicKey(SYSTEM_PROGRAM_ID),
-                    isWritable: false,
-                    isSigner: false,
-                },
+                { pubkey: new web3_js_1.PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
             ],
-            data: Buffer.concat([Buffer.from([6]), reasonBytes]),
+            data: Buffer.concat([discriminator, reasonLengthBuffer, reasonBytes]),
         });
         const tx = new web3_js_1.Transaction().add(ix);
         tx.feePayer = this.stablecoin.authorityAddress;
@@ -282,8 +308,8 @@ class ComplianceClient {
                 },
                 { pubkey: from, isWritable: true, isSigner: false },
                 { pubkey: to, isWritable: true, isSigner: false },
-                { pubkey: seizer.publicKey, isWritable: false, isSigner: true },
                 { pubkey: blacklist, isWritable: false, isSigner: false },
+                { pubkey: seizer.publicKey, isWritable: false, isSigner: true },
                 {
                     pubkey: new web3_js_1.PublicKey(TOKEN_2022_PROGRAM_ID),
                     isWritable: false,

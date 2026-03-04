@@ -178,115 +178,46 @@ export function useSolana() {
     async (
       preset: number,
       decimals: number = 6,
-      name: string = "Stablecoin",
-      symbol: string = "STBL"
+      name: string,
+      symbol: string,
+      supplyCap: number
     ) => {
       if (!connected || !wallet || !publicKey) {
         throw new Error("Wallet not connected");
       }
 
+      console.log(
+        "Creating token with preset:",
+        preset,
+        preset === 0 ? "SSS-1" : "SSS-2"
+      );
+
       setIsLoading(true);
       setError(null);
 
       try {
-        const authorityPubkey = new PublicKey(publicKey);
-
-        const mintKeypair = Keypair.generate();
-        const [config] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintKeypair.publicKey.toBuffer()],
-          new PublicKey("Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6")
-        );
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-
-        const tx = new Transaction();
-        const lamports = await connection.getMinimumBalanceForRentExemption(82);
-
-        // 1. Create mint account
-        tx.add(
-          SystemProgram.createAccount({
-            fromPubkey: authorityPubkey,
-            newAccountPubkey: mintKeypair.publicKey,
-            lamports,
-            space: 82,
-            programId: TOKEN_2022_PROGRAM_ID,
-          })
-        );
-
-        // 2. Initialize mint with Token-2022 (mint authority = wallet, will be transferred to config by program)
-        tx.add(
-          createInitializeMintInstruction(
-            mintKeypair.publicKey,
-            decimals,
-            authorityPubkey, // mint authority = wallet initially
-            authorityPubkey, // freeze authority = wallet initially
-            TOKEN_2022_PROGRAM_ID
-          )
-        );
-
-        // 3. Initialize stablecoin config
-        const initIx = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
-          keys: [
-            { pubkey: config, isWritable: true, isSigner: false },
-            {
-              pubkey: mintKeypair.publicKey,
-              isWritable: true,
-              isSigner: false,
-            },
-            { pubkey: authorityPubkey, isWritable: true, isSigner: true },
-            {
-              pubkey: TOKEN_2022_PROGRAM_ID,
-              isWritable: false,
-              isSigner: false,
-            },
-            {
-              pubkey: SystemProgram.programId,
-              isWritable: false,
-              isSigner: false,
-            },
-          ],
-          data: Buffer.concat([
-            getInstructionDiscriminator("initialize"),
-            Buffer.from([preset]),
-            Buffer.from([0]),
-            Buffer.from([decimals]),
-          ]),
+        const signer = {
+          publicKey: new PublicKey(publicKey),
+          signTransaction: (tx: Transaction) => {
+            if (!wallet.signTransaction) {
+              throw new Error("Wallet does not support signTransaction");
+            }
+            return wallet.signTransaction(tx) as Promise<Transaction>;
+          },
+        };
+        const stablecoin = await SolanaStablecoin.create(connection, {
+          name,
+          symbol,
+          preset: preset as 0 | 1,
+          decimals,
+          supplyCap,
+          authority: signer,
         });
-        tx.add(initIx);
 
-        tx.feePayer = authorityPubkey;
-        const { blockhash } = await connection.getLatestBlockhash();
-        tx.recentBlockhash = blockhash;
-
-        tx.partialSign(mintKeypair);
-
-        const signedTx = await wallet.signTransaction(tx);
-
-        const signature = await connection.sendRawTransaction(
-          signedTx.serialize(),
-          {
-            skipSimulation: true,
-          }
-        );
-
-        await connection.confirmTransaction(signature, "confirmed");
-
-        console.log("Token created! Signature:", signature);
-
-        const stablecoin = new SolanaStablecoin(
-          connection,
-          mintKeypair.publicKey,
-          config,
-          authorityPubkey,
-          preset as 0 | 1
-        );
-
-        // Add to tokens list immediately
         const newToken: SssToken = {
-          mint: mintKeypair.publicKey.toString(),
-          config: config.toString(),
-          authority: authorityPubkey.toString(),
+          mint: stablecoin.mint.toString(),
+          config: stablecoin.configAddress.toString(),
+          authority: publicKey.toString(),
           supply: "0",
           decimals,
           name,
@@ -659,7 +590,11 @@ export function useSolana() {
             { pubkey: configPubkey, isWritable: true, isSigner: false },
             { pubkey: authorityPubkey, isWritable: true, isSigner: true },
             { pubkey: targetPubkey, isWritable: false, isSigner: false },
-            { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
+            {
+              pubkey: new PublicKey(SYSTEM_PROGRAM_ID),
+              isWritable: false,
+              isSigner: false,
+            },
           ],
           data: Buffer.concat([
             discriminator,
@@ -722,7 +657,10 @@ export function useSolana() {
         );
 
         const discriminator = getInstructionDiscriminator("blacklist_remove");
-        console.log("blacklist_remove discriminator:", discriminator.toString("hex"));
+        console.log(
+          "blacklist_remove discriminator:",
+          discriminator.toString("hex")
+        );
 
         const ix = new TransactionInstruction({
           programId: new PublicKey(PROGRAM_ID),
@@ -763,7 +701,15 @@ export function useSolana() {
   );
 
   const seize = useCallback(
-    async (token: SssToken, fromWallet: string, toWallet: string, amount: number) => {
+    async (
+      token: SssToken,
+      fromWallet: string,
+      toWallet: string,
+      amount: number
+    ) => {
+      const configPubkey = new PublicKey(token.config);
+      const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
+
       if (!connected || !wallet || !publicKey) {
         throw new Error("Wallet not connected");
       }
@@ -777,10 +723,30 @@ export function useSolana() {
         const fromWalletPubkey = new PublicKey(fromWallet);
         const toWalletPubkey = new PublicKey(toWallet);
 
-        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } = await import("@solana/spl-token");
+        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
+          await import("@solana/spl-token");
 
-        const fromAta = await getAssociatedTokenAddress(mintPubkey, fromWalletPubkey, false, TOKEN_2022_PROGRAM_ID);
-        const toAta = await getAssociatedTokenAddress(mintPubkey, toWalletPubkey, false, TOKEN_2022_PROGRAM_ID);
+        const fromAta = await getAssociatedTokenAddress(
+          mintPubkey,
+          fromWalletPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+        const toAta = await getAssociatedTokenAddress(
+          mintPubkey,
+          toWalletPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const [blacklistPDA] = await PublicKey.findProgramAddress(
+          [
+            Buffer.from("blacklist"),
+            configPubkey.toBuffer(),
+            fromWalletPubkey.toBuffer(),
+          ],
+          new PublicKey(PROGRAM_ID)
+        );
 
         const fromAtaInfo = await connection.getAccountInfo(fromAta);
         if (!fromAtaInfo) {
@@ -788,27 +754,15 @@ export function useSolana() {
         }
 
         const toAtaInfo = await connection.getAccountInfo(toAta);
-        if (!toAtaInfo) {
-          throw new Error("Destination token account does not exist. Please create it first.");
-        }
-
-        console.log("From ATA owner:", fromAtaInfo.owner.toString());
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const [fromBlacklist] = await PublicKey.findProgramAddress(
-          [Buffer.from("blacklist"), configPubkey.toBuffer(), fromWalletPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
 
         const discriminator = getInstructionDiscriminator("seize");
 
         const amountBuffer = Buffer.alloc(8);
-        const view = new DataView(amountBuffer.buffer, amountBuffer.byteOffset, 8);
+        const view = new DataView(
+          amountBuffer.buffer,
+          amountBuffer.byteOffset,
+          8
+        );
         view.setBigUint64(0, BigInt(amount), true);
 
         const ix = new TransactionInstruction({
@@ -818,25 +772,48 @@ export function useSolana() {
             { pubkey: mintPubkey, isWritable: false, isSigner: false },
             { pubkey: fromAta, isWritable: true, isSigner: false },
             { pubkey: toAta, isWritable: true, isSigner: false },
-            { pubkey: fromBlacklist, isWritable: false, isSigner: false },
+            { pubkey: blacklistPDA, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
-            { pubkey: TOKEN_2022_PROGRAM_ID, isWritable: false, isSigner: false },
+            {
+              pubkey: TOKEN_2022_PROGRAM_ID,
+              isWritable: false,
+              isSigner: false,
+            },
           ],
           data: Buffer.concat([discriminator, amountBuffer]),
         });
 
-        const tx = new Transaction().add(ix);
+        const tx = new Transaction();
+
+        if (!toAtaInfo) {
+          const { createAssociatedTokenAccountInstruction } = await import(
+            "@solana/spl-token"
+          );
+          const createToAtaIx = createAssociatedTokenAccountInstruction(
+            authorityPubkey,
+            toAta,
+            toWalletPubkey,
+            mintPubkey,
+            TOKEN_2022_PROGRAM_ID
+          );
+          tx.add(createToAtaIx);
+        }
+
+        tx.add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
 
         const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(signed.serialize());
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
         await connection.confirmTransaction(signature, "confirmed");
         console.log("Tokens seized! Signature:", signature);
 
         return signature;
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Failed to seize tokens";
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to seize tokens";
         setError(errorMsg);
         throw err;
       } finally {
@@ -875,7 +852,7 @@ export function useSolana() {
             time: string;
             txn: string;
           }
-          > = new Map();
+        > = new Map();
 
         const blacklistAddDiscriminator = "03c44e886fc5bc72";
 
@@ -910,12 +887,15 @@ export function useSolana() {
                     let address = "";
                     if (tx.transaction.message.accountKeys) {
                       const accounts = tx.transaction.message.accountKeys;
-                      const accountKeys = Array.isArray(accounts) 
-                        ? accounts 
+                      const accountKeys = Array.isArray(accounts)
+                        ? accounts
                         : Object.values(accounts);
                       if (accountKeys.length > 5) {
                         const targetAcc = accountKeys[5];
-                        address = typeof targetAcc === 'string' ? targetAcc : targetAcc.pubkey;
+                        address =
+                          typeof targetAcc === "string"
+                            ? targetAcc
+                            : targetAcc.pubkey;
                       }
                     }
 
@@ -976,7 +956,8 @@ export function useSolana() {
           { limit: 50 }
         );
 
-        const entries: Map<string, { target: string; reason?: string }> = new Map();
+        const entries: Map<string, { target: string; reason?: string }> =
+          new Map();
         const blacklistAddDiscriminator = "03c44e886fc5bc72";
 
         for (const sig of signatures) {
@@ -1000,22 +981,32 @@ export function useSolana() {
                   if (discriminator === blacklistAddDiscriminator) {
                     if (tx.transaction.message.accountKeys) {
                       const accounts = tx.transaction.message.accountKeys;
-                      const accountKeys = Array.isArray(accounts) 
-                        ? accounts 
+                      const accountKeys = Array.isArray(accounts)
+                        ? accounts
                         : Object.values(accounts);
-                      
+
                       let reason;
                       if (dataBuffer.length > 8) {
                         const reasonLength = dataBuffer.readUInt32LE(8);
-                        if (reasonLength > 0 && reasonLength < 200 && dataBuffer.length > 12) {
-                          const reasonBuffer = dataBuffer.slice(12, 12 + reasonLength);
+                        if (
+                          reasonLength > 0 &&
+                          reasonLength < 200 &&
+                          dataBuffer.length > 12
+                        ) {
+                          const reasonBuffer = dataBuffer.slice(
+                            12,
+                            12 + reasonLength
+                          );
                           reason = reasonBuffer.toString("utf8");
                         }
                       }
 
                       if (accountKeys.length > 4) {
                         const targetAcc = accountKeys[4];
-                        const target = typeof targetAcc === 'string' ? targetAcc : targetAcc.pubkey;
+                        const target =
+                          typeof targetAcc === "string"
+                            ? targetAcc
+                            : targetAcc.pubkey;
                         const targetStr = target.toString();
                         entries.set(targetStr, { target: targetStr, reason });
                       }
@@ -1042,14 +1033,20 @@ export function useSolana() {
         for (const entry of entries.values()) {
           try {
             const [blacklistPDA] = await PublicKey.findProgramAddress(
-              [Buffer.from("blacklist"), configPubkey.toBuffer(), new PublicKey(entry.target).toBuffer()],
+              [
+                Buffer.from("blacklist"),
+                configPubkey.toBuffer(),
+                new PublicKey(entry.target).toBuffer(),
+              ],
               new PublicKey(PROGRAM_ID)
             );
-            
+
             const accountInfo = await connection.getAccountInfo(blacklistPDA);
             if (accountInfo && accountInfo.data.length > 0) {
               result.push({
-                address: `${entry.target.slice(0, 4)}...${entry.target.slice(-4)}`,
+                address: `${entry.target.slice(0, 4)}...${entry.target.slice(
+                  -4
+                )}`,
                 addressFull: entry.target,
                 reason: entry.reason,
                 txn: "",
@@ -1191,10 +1188,17 @@ export function useSolana() {
 
         const seizeActions: Map<
           string,
-          { from: string; to: string; amount: string; time: string; txn: string }
+          {
+            from: string;
+            to: string;
+            amount: string;
+            time: string;
+            txn: string;
+          }
         > = new Map();
 
-        const seizeDiscriminator = getInstructionDiscriminator("seize").toString("hex");
+        const seizeDiscriminator =
+          getInstructionDiscriminator("seize").toString("hex");
 
         for (const sig of signatures) {
           try {
@@ -1236,7 +1240,10 @@ export function useSolana() {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       }),
-                      txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(-4)}`,
+                      txn: `${sig.signature.slice(
+                        0,
+                        4
+                      )}...${sig.signature.slice(-4)}`,
                       time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                     });
                   }
@@ -1391,7 +1398,14 @@ export function useSolana() {
           console.log("ATA created!");
         }
 
-        console.log("Minting - amount:", amount, "decimals:", token.decimals, "result:", amount * Math.pow(10, token.decimals));
+        console.log(
+          "Minting - amount:",
+          amount,
+          "decimals:",
+          token.decimals,
+          "result:",
+          amount * Math.pow(10, token.decimals)
+        );
         const amountInSmallest = Math.floor(
           amount * Math.pow(10, token.decimals)
         );

@@ -4,6 +4,7 @@ export declare const PRESET: {
     readonly SSS_2: 1;
 };
 export type Preset = (typeof PRESET)[keyof typeof PRESET];
+export declare function getInstructionDiscriminator(name: string): Buffer;
 export interface Signer {
     publicKey: PublicKey;
     signTransaction(tx: Transaction): Promise<Transaction>;
@@ -49,12 +50,14 @@ export declare class SolanaStablecoin {
     private _authority;
     private _preset;
     private _programId;
+    private _decimals;
     private constructor();
     static create(connection: Connection, params: CreateStablecoinParams): Promise<SolanaStablecoin>;
     static fetch(connection: Connection, mint: PublicKey): Promise<SolanaStablecoin | null>;
     get mintAddress(): PublicKey;
     get configAddress(): PublicKey;
     get authorityAddress(): PublicKey;
+    get decimals(): number;
     get isCompliant(): boolean;
     getTotalSupply(): Promise<number>;
     mint(params: MintParams): Promise<string>;

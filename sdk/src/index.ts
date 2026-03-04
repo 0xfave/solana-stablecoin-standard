@@ -6,6 +6,12 @@ import {
   SystemProgram,
   Keypair,
 } from "@solana/web3.js";
+import { 
+  ExtensionType, 
+  getMintLen,
+  createInitializePermanentDelegateInstruction,
+  createInitializeMintInstruction 
+} from "@solana/spl-token";
 import { createHash } from "crypto";
 
 export const PRESET = {
@@ -97,7 +103,7 @@ export class SolanaStablecoin {
   static async create(
     connection: Connection,
     params: CreateStablecoinParams
-  ): Promise<SolanaStablecoin> {
+  ): Promise<SolanaStablecoin> {      
     const { preset, authority, decimals, supplyCap } = params;
 
     const mintKeypair = Keypair.generate();
@@ -107,17 +113,43 @@ export class SolanaStablecoin {
     );
 
     const tx = new Transaction();
-    const lamports = await connection.getMinimumBalanceForRentExemption(82);
+
+    // Calculate mint space - larger if preset=1 (SSS-2) needs Permanent Delegate extension
+    const extensions = preset === PRESET.SSS_2 
+      ? [ExtensionType.PermanentDelegate] 
+      : [];
+    const mintSpace = getMintLen(extensions);
+    const lamports = await connection.getMinimumBalanceForRentExemption(mintSpace);
 
     tx.add(
       SystemProgram.createAccount({
         fromPubkey: authority.publicKey,
         newAccountPubkey: mintKeypair.publicKey,
         lamports,
-        space: 82,
+        space: mintSpace,
         programId: new PublicKey(TOKEN_2022_PROGRAM_ID),
       })
     );
+    
+    // For preset=1 (SSS-2), add Permanent Delegate extension
+    if (preset === PRESET.SSS_2) {
+      const initPermanentDelegateIx = createInitializePermanentDelegateInstruction(
+        mintKeypair.publicKey,
+        config,
+        new PublicKey(TOKEN_2022_PROGRAM_ID)
+      );
+      tx.add(initPermanentDelegateIx);
+    }
+      
+    const initMintIx = createInitializeMintInstruction(
+      mintKeypair.publicKey,
+      decimals,
+      authority.publicKey,        // temporary mint authority (will be changed by program)
+      authority.publicKey,        // temporary freeze authority
+      new PublicKey(TOKEN_2022_PROGRAM_ID)
+    );
+    tx.add(initMintIx);
+
 
     const initIx = new TransactionInstruction({
       programId: new PublicKey(PROGRAM_ID),
@@ -459,8 +491,8 @@ export class ComplianceClient {
         },
         { pubkey: from, isWritable: true, isSigner: false },
         { pubkey: to, isWritable: true, isSigner: false },
-        { pubkey: seizer.publicKey, isWritable: false, isSigner: true },
         { pubkey: blacklist, isWritable: false, isSigner: false },
+        { pubkey: seizer.publicKey, isWritable: false, isSigner: true },
         {
           pubkey: new PublicKey(TOKEN_2022_PROGRAM_ID),
           isWritable: false,
