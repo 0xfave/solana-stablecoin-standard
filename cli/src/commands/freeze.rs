@@ -7,6 +7,7 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
+use solana_sdk::hash::hash;
 
 const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
@@ -21,6 +22,12 @@ fn derive_ata(wallet: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey 
         &associated_token_program,
     )
     .0
+}
+
+fn discriminator(name: &str) -> [u8; 8] {
+    let preimage = format!("global:{}", name);
+    let h = hash(preimage.as_bytes());
+    h.to_bytes()[..8].try_into().unwrap()
 }
 
 pub async fn execute(
@@ -52,7 +59,7 @@ pub async fn execute(
     println!("Freezing ATA: {}", ata);
 
     // Discriminator from IDL: freeze_account = [253, 75, 82, 133, 167, 238, 43, 130]
-    let discriminator: [u8; 8] = [253, 75, 82, 133, 167, 238, 43, 130];
+    let discriminator = discriminator("freeze_account");
 
     let ix = Instruction::new_with_bytes(
         program_id,

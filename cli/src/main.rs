@@ -6,6 +6,7 @@ mod commands;
 mod config;
 mod rpc_client;
 mod signer;
+mod tui;
 
 use commands::blacklist::BlacklistAction;
 use commands::minters::MinterAction;
@@ -93,6 +94,8 @@ enum Commands {
         #[arg(long, short)]
         action: Option<String>,
     },
+    
+    Tui,
 }
 
 fn load_config() -> config::CliConfig {
@@ -214,6 +217,9 @@ async fn main() -> Result<()> {
         }
         Commands::AuditLog { action } => {
             audit_log::execute(action).await?;
+        }
+        Commands::Tui => {
+            tui::run(&rpc_client, &keypair, mint).await?;
         }
     }
 

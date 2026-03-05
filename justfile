@@ -195,6 +195,10 @@ cli-minters-remove address:
 # CLI holders
 cli-holders:
 	cd cli && cargo run --release -- holders
+	
+# CLI TUI
+cli-tui:
+	cd cli && cargo run --release -- tui
 
 # Full stack: build programs + build backend
 full-stack: build-all backend-build

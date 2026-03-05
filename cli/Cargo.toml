@@ -24,6 +24,9 @@ borsh = "1.5"
 sha2 = "0.10"
 spl-token-2022 = "9.0"
 spl-associated-token-account = "8.0"
+ratatui = "0.28"
+crossterm = "0.28"
+gag = "1.0"
 
 [[bin]]
 name = "sss-token"
