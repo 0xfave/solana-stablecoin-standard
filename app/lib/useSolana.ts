@@ -44,6 +44,9 @@ export interface SssToken {
   symbol?: string;
   paused: boolean;
   preset: number;
+  minters?: string[];
+  freezer?: string;
+  blacklister?: string;
 }
 
 // ─── Pure Utilities (outside hook) ───────────────────────────────────────────
@@ -178,8 +181,74 @@ export function useSolana() {
 
             try {
               const mintPubkey = new PublicKey(account.data.slice(40, 72));
-              const preset = account.data[68] ?? 0;
+              const preset = account.data[72] ?? 0;
 
+              const minters: string[] = [];
+              let freezer = "";
+              let blacklister = "";
+
+              try {
+                const configRaw = account.data;
+
+                let offset = 74;
+
+                // supply_cap: Option<u64> — 1 byte tag + 8 bytes if Some
+                const hasSupplyCap = configRaw[offset] === 1;
+                offset += 1;
+                if (hasSupplyCap) offset += 8;
+
+                // transfer_hook_program: Option<Pubkey> — 1 byte tag + 32 bytes if Some
+                const hasTransferHook = configRaw[offset] === 1;
+                offset += 1;
+                if (hasTransferHook) offset += 32;
+
+                // decimals: u8
+                offset += 1;
+
+                // bump: u8
+                offset += 1;
+
+                // pending_master_authority: Option<Pubkey> — 1 byte tag + 32 bytes if Some
+                const hasPending = configRaw[offset] === 1;
+                offset += 1;
+                if (hasPending) offset += 32;
+
+                // minters: Vec<Pubkey> — 4 bytes length + 32 bytes per entry
+                const mintersLen = configRaw.readUInt32LE(offset);
+                offset += 4;
+
+                for (let m = 0; m < mintersLen && m < 10; m++) {
+                  if (offset + 32 <= configRaw.length) {
+                    minters.push(
+                      new PublicKey(
+                        configRaw.slice(offset, offset + 32)
+                      ).toString()
+                    );
+                  }
+                  offset += 32;
+                }
+
+                // freezer: Pubkey
+                if (offset + 32 <= configRaw.length) {
+                  freezer = new PublicKey(
+                    configRaw.slice(offset, offset + 32)
+                  ).toString();
+                  offset += 32;
+                }
+
+                // pauser: Pubkey — skip it
+                offset += 32;
+
+                // blacklister: Pubkey
+                if (offset + 32 <= configRaw.length) {
+                  blacklister = new PublicKey(
+                    configRaw.slice(offset, offset + 32)
+                  ).toString();
+                }
+              } catch (e) {
+                console.warn("Failed to parse roles from config", e);
+              }
+              // ── Fetch supply and decimals ─────────────────────────────────
               const sss = await SolanaStablecoin.fetch(connection, mintPubkey);
               if (sss) {
                 const supply = await sss.getTotalSupply();
@@ -191,6 +260,9 @@ export function useSolana() {
                   decimals: sss.decimals,
                   paused: false,
                   preset,
+                  minters,
+                  freezer,
+                  blacklister,
                 });
               } else {
                 const mintInfo = await getMint(
@@ -207,6 +279,9 @@ export function useSolana() {
                   decimals: mintInfo.decimals,
                   paused: false,
                   preset,
+                  minters,
+                  freezer,
+                  blacklister,
                 });
               }
             } catch (e) {
