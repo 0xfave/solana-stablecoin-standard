@@ -20,7 +20,7 @@ import {
   SolanaStablecoin,
   getInstructionDiscriminator,
 } from "../../sdk/src/index";
-
+import { createHash } from "crypto";
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const RPC_URL =
@@ -1236,6 +1236,167 @@ export function useSolana() {
     [connected, connection]
   );
 
+  const fetchBurnHistory = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+      try {
+        const mintPubkey = new PublicKey(token.mint);
+        const signatures = await connection.getSignaturesForAddress(
+          mintPubkey,
+          { limit: 20 }
+        );
+        const history: {
+          amount: string;
+          from: string;
+          txn: string;
+          time: string;
+        }[] = [];
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (!log.includes("Program data:")) continue;
+              const dataBuffer = Buffer.from(
+                log.replace("Program data: ", ""),
+                "base64"
+              );
+              if (dataBuffer.length < 8) continue;
+
+              const discriminator = dataBuffer.slice(0, 8).toString("hex");
+              if (discriminator !== "e6ff2271e235e309") continue; // ✅ confirmed
+
+              const from = new PublicKey(dataBuffer.slice(40, 72)).toString();
+              const amount = new DataView(
+                dataBuffer.buffer,
+                dataBuffer.byteOffset
+              ).getBigUint64(72, true);
+
+              history.push({
+                amount: `-${(
+                  Number(amount) / Math.pow(10, token.decimals)
+                ).toLocaleString(undefined, {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`,
+                from: `${from.slice(0, 4)}...${from.slice(-4)}`,
+                txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(
+                  -4
+                )}`,
+                time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+              });
+            }
+          } catch {
+            // skip
+          }
+        }
+        return history;
+      } catch (err) {
+        console.error("Error fetching burn history:", err);
+        return [];
+      }
+    },
+    [connected, connection]
+  );
+
+  const pauseToken = useCallback(
+    async (token: SssToken, paused: boolean) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+          ],
+          data: Buffer.concat([
+            getInstructionDiscriminator("update_paused"),
+            Buffer.from([paused ? 1 : 0]),
+          ]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+
+        // Update local state immediately
+        setTokens((prev) =>
+          prev.map((t) => (t.mint === token.mint ? { ...t, paused } : t))
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
+
+  const burnTokens = useCallback(
+    async (token: SssToken, fromWallet: string, amount: number) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const fromPubkey = new PublicKey(fromWallet);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+
+        const fromAta = await getAssociatedTokenAddress(
+          mintPubkey,
+          fromPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const amountBuffer = Buffer.alloc(8);
+        new DataView(amountBuffer.buffer).setBigUint64(0, BigInt(amount), true);
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: true, isSigner: false },
+            { pubkey: fromAta, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: TOKEN_2022_PROGRAM_ID,
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: Buffer.concat([
+            getInstructionDiscriminator("burn"),
+            amountBuffer,
+          ]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
+
   // ─── Return ───────────────────────────────────────────────────────────────
 
   return {
@@ -1267,5 +1428,8 @@ export function useSolana() {
     selectedToken,
     setSelectedToken,
     refreshTokens: fetchTokens,
+    fetchBurnHistory,
+    burnTokens,
+    pauseToken,
   };
 }
