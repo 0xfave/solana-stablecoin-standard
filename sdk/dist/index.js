@@ -29,17 +29,11 @@ class SolanaStablecoin {
     }
     static async create(connection, params) {
         const { preset, authority, decimals, supplyCap } = params;
-        console.log("SDK create() called with preset:", preset);
-        console.log("PRESET.SSS_2 value:", exports.PRESET.SSS_2);
-        console.log("Is SSS-2?", preset === exports.PRESET.SSS_2);
-        console.log("Extensions:", preset === exports.PRESET.SSS_2 ? [spl_token_1.ExtensionType.PermanentDelegate] : []);
         const mintKeypair = web3_js_1.Keypair.generate();
         const [config] = await web3_js_1.PublicKey.findProgramAddress([Buffer.from("stablecoin"), mintKeypair.publicKey.toBuffer()], new web3_js_1.PublicKey(PROGRAM_ID));
         const tx = new web3_js_1.Transaction();
         // Calculate mint space - larger if preset=1 (SSS-2) needs Permanent Delegate extension
-        const extensions = preset === exports.PRESET.SSS_2
-            ? [spl_token_1.ExtensionType.PermanentDelegate]
-            : [];
+        const extensions = preset === exports.PRESET.SSS_2 ? [spl_token_1.ExtensionType.PermanentDelegate] : [];
         const mintSpace = (0, spl_token_1.getMintLen)(extensions);
         const lamports = await connection.getMinimumBalanceForRentExemption(mintSpace);
         tx.add(web3_js_1.SystemProgram.createAccount({
@@ -103,13 +97,12 @@ class SolanaStablecoin {
         if (!configInfo?.data)
             return null;
         const data = configInfo.data;
-        const discriminator = data.readUInt32LE(0);
-        if (discriminator !== 1393578635)
+        if (data.length < 8)
             return null;
-        const masterAuthority = new web3_js_1.PublicKey(data.slice(4, 36));
-        const mintAddr = new web3_js_1.PublicKey(data.slice(36, 68));
-        const preset = data[68];
-        const paused = data[69] === 1;
+        const masterAuthority = new web3_js_1.PublicKey(data.slice(8, 40));
+        const mintAddr = new web3_js_1.PublicKey(data.slice(40, 72));
+        const preset = data[72];
+        const paused = data[73] === 1;
         const mintInfo = await connection.getParsedAccountInfo(mint);
         let decimals = 9;
         if (mintInfo.value?.data) {
@@ -274,15 +267,25 @@ class ComplianceClient {
         const reasonBytes = Buffer.from(reason.slice(0, 200));
         const reasonLengthBuffer = Buffer.alloc(4);
         reasonLengthBuffer.writeUInt32LE(reasonBytes.length, 0);
-        const discriminator = Buffer.from([0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4]);
+        const discriminator = Buffer.from([
+            0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4,
+        ]);
         const ix = new web3_js_1.TransactionInstruction({
             programId: new web3_js_1.PublicKey(PROGRAM_ID),
             keys: [
                 { pubkey: blacklist, isWritable: true, isSigner: false },
                 { pubkey: config, isWritable: true, isSigner: false },
-                { pubkey: this.stablecoin.authorityAddress, isWritable: true, isSigner: true },
+                {
+                    pubkey: this.stablecoin.authorityAddress,
+                    isWritable: true,
+                    isSigner: true,
+                },
                 { pubkey: address, isWritable: false, isSigner: false },
-                { pubkey: new web3_js_1.PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
+                {
+                    pubkey: new web3_js_1.PublicKey(SYSTEM_PROGRAM_ID),
+                    isWritable: false,
+                    isSigner: false,
+                },
             ],
             data: Buffer.concat([discriminator, reasonLengthBuffer, reasonBytes]),
         });

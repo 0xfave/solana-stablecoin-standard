@@ -8,20 +8,31 @@ import {
   Transaction,
   TransactionInstruction,
   SystemProgram,
-  Keypair,
 } from "@solana/web3.js";
 import {
-  createInitializeMintInstruction,
-  TOKEN_2022_PROGRAM_ID,
   getMint,
+  getAssociatedTokenAddress,
+  getAccount,
+  createAssociatedTokenAccountInstruction,
+  TOKEN_2022_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
   SolanaStablecoin,
   getInstructionDiscriminator,
 } from "../../sdk/src/index";
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
 const RPC_URL =
   process.env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com";
+
+const PROGRAM_ID = new PublicKey(
+  "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+);
+
+const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface SssToken {
   mint: string;
@@ -35,27 +46,111 @@ export interface SssToken {
   preset: number;
 }
 
+// ─── Pure Utilities (outside hook) ───────────────────────────────────────────
+
+function getTimeAgo(timestamp: number): string {
+  const seconds = Math.floor(Date.now() / 1000 - timestamp);
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+function getConfigPda(mintPubkey: PublicKey): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+function getBlacklistPda(
+  configPubkey: PublicKey,
+  targetPubkey: PublicKey
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [
+      Buffer.from("blacklist"),
+      configPubkey.toBuffer(),
+      targetPubkey.toBuffer(),
+    ],
+    PROGRAM_ID
+  );
+}
+
+// ─── Hook ─────────────────────────────────────────────────────────────────────
+
 export function useSolana() {
   const { connected, publicKey, wallet, connectWallet, disconnectWallet } =
     useContext(WalletContext);
   const { selectedToken, setSelectedToken } = useContext(TokenContext);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tokens, setTokens] = useState<SssToken[]>([]);
-  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const walletAddress = publicKey || "";
+  const fetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const prevPublicKeyRef = useRef<string | null>(null);
+
   const connectionRef = useRef<Connection | null>(null);
   if (!connectionRef.current) {
     connectionRef.current = new Connection(RPC_URL, "confirmed");
   }
   const connection = connectionRef.current;
 
+  const walletAddress = publicKey || "";
+
+  // ─── Shared loading wrapper ───────────────────────────────────────────────
+
+  const withLoading = useCallback(
+    async <T>(fn: () => Promise<T>): Promise<T> => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        return await fn();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        setError(msg);
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
+  );
+
+  // ─── Shared signer builder ────────────────────────────────────────────────
+
+  const buildSigner = useCallback(() => {
+    if (!wallet || !publicKey) throw new Error("Wallet not connected");
+    return {
+      publicKey: new PublicKey(publicKey),
+      signTransaction: (tx: Transaction) => {
+        if (!wallet.signTransaction)
+          throw new Error("Wallet does not support signTransaction");
+        return wallet.signTransaction(tx) as Promise<Transaction>;
+      },
+    };
+  }, [wallet, publicKey]);
+
+  // ─── Clear tokens on wallet change ───────────────────────────────────────
+
+  useEffect(() => {
+    if (
+      publicKey &&
+      prevPublicKeyRef.current &&
+      prevPublicKeyRef.current !== publicKey
+    ) {
+      setTokens([]);
+      setSelectedToken(null);
+    }
+    prevPublicKeyRef.current = publicKey;
+  }, [publicKey, setSelectedToken]);
+
+  // ─── Fetch tokens ─────────────────────────────────────────────────────────
+
   const fetchTokens = useCallback(
     async (immediate = false) => {
-      if (fetchTimeoutRef.current) {
-        clearTimeout(fetchTimeoutRef.current);
-      }
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
 
       const executeFetch = async () => {
         if (!connected || !publicKey) {
@@ -66,39 +161,25 @@ export function useSolana() {
         setIsLoading(true);
         try {
           const walletPubkey = new PublicKey(publicKey);
-          const programId = new PublicKey(
-            "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
-          );
 
-          // Filter: master_authority at offset 8 matches wallet
-          const filters = [
-            { memcmp: { offset: 8, bytes: walletPubkey.toBase58() } },
-          ];
-
-          const accounts = await connection.getProgramAccounts(programId, {
-            filters,
+          const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
+            filters: [
+              { memcmp: { offset: 8, bytes: walletPubkey.toBase58() } },
+            ],
             commitment: "confirmed",
           });
 
           const sssTokens: SssToken[] = [];
 
           for (const { pubkey: configPubkey, account } of accounts) {
+            // Client-side guard: verify master_authority matches wallet
+            const masterAuthority = new PublicKey(account.data.slice(8, 40));
+            if (!masterAuthority.equals(walletPubkey)) continue;
+
             try {
               const mintPubkey = new PublicKey(account.data.slice(40, 72));
+              const preset = account.data[68] ?? 0;
 
-              let preset = 0;
-              try {
-                const configData = await connection.getAccountInfo(
-                  configPubkey
-                );
-                if (configData?.data) {
-                  preset = configData.data[68] ?? 0;
-                }
-              } catch (e) {
-                console.warn("Failed to get preset from config", e);
-              }
-
-              // Attempt to fetch via SDK
               const sss = await SolanaStablecoin.fetch(connection, mintPubkey);
               if (sss) {
                 const supply = await sss.getTotalSupply();
@@ -108,11 +189,10 @@ export function useSolana() {
                   authority: walletPubkey.toString(),
                   supply: supply.toString(),
                   decimals: sss.decimals,
-                  paused: false, // Update if SDK exposes paused
+                  paused: false,
                   preset,
                 });
               } else {
-                // Fallback: read mint directly
                 const mintInfo = await getMint(
                   connection,
                   mintPubkey,
@@ -158,14 +238,19 @@ export function useSolana() {
   useEffect(() => {
     if (connected && publicKey) {
       fetchTokens(true);
+    } else {
+      setTokens([]);
     }
-  }, [connected, publicKey, fetchTokens]);
+    // intentionally excluding fetchTokens to avoid loop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, publicKey]);
+
+  // ─── getBalance ───────────────────────────────────────────────────────────
 
   const getBalance = useCallback(
     async (addr: string) => {
       try {
-        const pubkey = new PublicKey(addr);
-        const bal = await connection.getBalance(pubkey);
+        const bal = await connection.getBalance(new PublicKey(addr));
         return bal / 1e9;
       } catch {
         return 0;
@@ -174,37 +259,21 @@ export function useSolana() {
     [connection]
   );
 
+  // ─── createToken ──────────────────────────────────────────────────────────
+
   const createToken = useCallback(
     async (
       preset: number,
-      decimals: number = 6,
+      decimals = 6,
       name: string,
       symbol: string,
-      supplyCap: number
+      supplyCap?: number
     ) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      console.log(
-        "Creating token with preset:",
-        preset,
-        preset === 0 ? "SSS-1" : "SSS-2"
-      );
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const signer = {
-          publicKey: new PublicKey(publicKey),
-          signTransaction: (tx: Transaction) => {
-            if (!wallet.signTransaction) {
-              throw new Error("Wallet does not support signTransaction");
-            }
-            return wallet.signTransaction(tx) as Promise<Transaction>;
-          },
-        };
+      return withLoading(async () => {
+        const signer = buildSigner();
         const stablecoin = await SolanaStablecoin.create(connection, {
           name,
           symbol,
@@ -215,9 +284,9 @@ export function useSolana() {
         });
 
         const newToken: SssToken = {
-          mint: stablecoin.mint.toString(),
+          mint: stablecoin.mintAddress.toString(),
           config: stablecoin.configAddress.toString(),
-          authority: publicKey.toString(),
+          authority: publicKey,
           supply: "0",
           decimals,
           name,
@@ -226,247 +295,60 @@ export function useSolana() {
           preset,
         };
         setTokens((prev) => [...prev, newToken]);
-
         return stablecoin;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to create token";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
   );
+
+  // ─── addMinter ────────────────────────────────────────────────────────────
 
   const addMinter = useCallback(
     async (token: SssToken, minterAddress: string) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const authorityPubkey = new PublicKey(publicKey);
+      return withLoading(async () => {
         const mintPubkey = new PublicKey(token.mint);
-        const minterPubkey = new PublicKey(minterAddress);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+        const signer = buildSigner();
 
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
+        const stablecoin = await SolanaStablecoin.fetch(connection, mintPubkey);
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.addMinter(
+          new PublicKey(minterAddress),
+          signer
         );
-
-        const stablecoin = new SolanaStablecoin(
-          connection,
-          mintPubkey,
-          configPubkey,
-          authorityPubkey,
-          token.preset as 0 | 1
-        );
-
-        const signature = await stablecoin.addMinter(minterPubkey, {
-          publicKey: authorityPubkey,
-          signTransaction: async (tx) => {
-            if (!wallet) throw new Error("Wallet not connected");
-            return wallet.signTransaction(tx);
-          },
-        });
-
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Minter added! Signature:", signature);
-
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to add minter";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
   );
+
+  // ─── addFreezer ───────────────────────────────────────────────────────────
 
   const addFreezer = useCallback(
     async (token: SssToken, freezerAddress: string) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
+      return withLoading(async () => {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
-        const freezerPubkey = new PublicKey(freezerAddress);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const discriminator = getInstructionDiscriminator("update_freezer");
+        const [configPubkey] = await getConfigPda(mintPubkey);
 
         const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
+          programId: PROGRAM_ID,
           keys: [
             { pubkey: configPubkey, isWritable: true, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
           ],
-          data: Buffer.concat([discriminator, freezerPubkey.toBuffer()]),
-        });
-
-        const tx = new Transaction().add(ix);
-        tx.feePayer = authorityPubkey;
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
-        await connection.confirmTransaction(signature, "confirmed");
-        console.log("Freezer added! Signature:", signature);
-
-        return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to add freezer";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [connected, wallet, publicKey, connection]
-  );
-
-  const freeze = useCallback(
-    async (token: SssToken, walletAddress: string) => {
-      if (!connected || !wallet || !publicKey) {
-        throw new Error("Wallet not connected");
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const authorityPubkey = new PublicKey(publicKey);
-        const mintPubkey = new PublicKey(token.mint);
-        const walletPubkey = new PublicKey(walletAddress);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
-          await import("@solana/spl-token");
-        const accountPubkey = await getAssociatedTokenAddress(
-          mintPubkey,
-          walletPubkey,
-          false,
-          TOKEN_2022_PROGRAM_ID
-        );
-
-        const discriminator = Buffer.from([
-          253, 75, 82, 133, 167, 238, 43, 130,
-        ]);
-
-        const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
-          keys: [
-            { pubkey: configPubkey, isWritable: false, isSigner: false },
-            { pubkey: mintPubkey, isWritable: false, isSigner: false },
-            { pubkey: accountPubkey, isWritable: true, isSigner: false },
-            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
-            {
-              pubkey: new PublicKey(TOKEN_2022_PROGRAM_ID),
-              isWritable: false,
-              isSigner: false,
-            },
-          ],
-          data: discriminator,
-        });
-
-        const tx = new Transaction().add(ix);
-        tx.feePayer = authorityPubkey;
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
-        await connection.confirmTransaction(signature, "confirmed");
-        console.log("Account frozen! Signature:", signature);
-
-        return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to freeze account";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [connected, wallet, publicKey, connection]
-  );
-
-  const thaw = useCallback(
-    async (token: SssToken, walletAddress: string) => {
-      if (!connected || !wallet || !publicKey) {
-        throw new Error("Wallet not connected");
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const authorityPubkey = new PublicKey(publicKey);
-        const mintPubkey = new PublicKey(token.mint);
-        const walletPubkey = new PublicKey(walletAddress);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
-          await import("@solana/spl-token");
-        const accountPubkey = await getAssociatedTokenAddress(
-          mintPubkey,
-          walletPubkey,
-          false,
-          TOKEN_2022_PROGRAM_ID
-        );
-
-        const discriminator = Buffer.from([
-          115, 152, 79, 213, 213, 169, 184, 35,
-        ]);
-
-        const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
-          keys: [
-            { pubkey: configPubkey, isWritable: false, isSigner: false },
-            { pubkey: mintPubkey, isWritable: false, isSigner: false },
-            { pubkey: accountPubkey, isWritable: true, isSigner: false },
-            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
-            {
-              pubkey: new PublicKey(TOKEN_2022_PROGRAM_ID),
-              isWritable: false,
-              isSigner: false,
-            },
-          ],
-          data: discriminator,
+          data: Buffer.concat([
+            getInstructionDiscriminator("update_freezer"),
+            new PublicKey(freezerAddress).toBuffer(),
+          ]),
         });
 
         const tx = new Transaction().add(ix);
@@ -479,47 +361,33 @@ export function useSolana() {
         );
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to thaw account";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading]
   );
+
+  // ─── addBlacklister ───────────────────────────────────────────────────────
 
   const addBlacklister = useCallback(
     async (token: SssToken, blacklisterAddress: string) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
+      return withLoading(async () => {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
-        const blacklisterPubkey = new PublicKey(blacklisterAddress);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const discriminator = Buffer.from([55, 173, 233, 56, 217, 53, 67, 172]);
+        const [configPubkey] = await getConfigPda(mintPubkey);
 
         const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
+          programId: PROGRAM_ID,
           keys: [
             { pubkey: configPubkey, isWritable: true, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
           ],
-          data: Buffer.concat([discriminator, blacklisterPubkey.toBuffer()]),
+          data: Buffer.concat([
+            getInstructionDiscriminator("update_blacklister"),
+            new PublicKey(blacklisterAddress).toBuffer(),
+          ]),
         });
 
         const tx = new Transaction().add(ix);
@@ -531,73 +399,44 @@ export function useSolana() {
           signed.serialize()
         );
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Blacklister added! Signature:", signature);
-
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to add blacklister";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading]
   );
+
+  // ─── blacklistAdd ─────────────────────────────────────────────────────────
 
   const blacklistAdd = useCallback(
     async (token: SssToken, address: string, reason: string) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
+      return withLoading(async () => {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
         const targetPubkey = new PublicKey(address);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
+        const [configPubkey] = await getConfigPda(mintPubkey);
+        const [blacklistEntry] = await getBlacklistPda(
+          configPubkey,
+          targetPubkey
         );
-
-        const [blacklistEntry] = await PublicKey.findProgramAddress(
-          [
-            Buffer.from("blacklist"),
-            configPubkey.toBuffer(),
-            targetPubkey.toBuffer(),
-          ],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const discriminator = getInstructionDiscriminator("blacklist_add");
 
         const reasonBuffer = Buffer.from(reason);
         const reasonLengthBuffer = Buffer.alloc(4);
         reasonLengthBuffer.writeUInt32LE(reasonBuffer.length, 0);
 
-        const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
-
         const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
+          programId: PROGRAM_ID,
           keys: [
             { pubkey: blacklistEntry, isWritable: true, isSigner: false },
             { pubkey: configPubkey, isWritable: true, isSigner: false },
             { pubkey: authorityPubkey, isWritable: true, isSigner: true },
             { pubkey: targetPubkey, isWritable: false, isSigner: false },
-            {
-              pubkey: new PublicKey(SYSTEM_PROGRAM_ID),
-              isWritable: false,
-              isSigner: false,
-            },
+            { pubkey: SYSTEM_PROGRAM, isWritable: false, isSigner: false },
           ],
           data: Buffer.concat([
-            discriminator,
+            getInstructionDiscriminator("blacklist_add"),
             reasonLengthBuffer,
             reasonBuffer,
           ]),
@@ -612,58 +451,31 @@ export function useSolana() {
           signed.serialize()
         );
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Address blacklisted! Signature:", signature);
-
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to add to blacklist";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading]
   );
+
+  // ─── blacklistRemove ──────────────────────────────────────────────────────
 
   const blacklistRemove = useCallback(
     async (token: SssToken, address: string) => {
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
+      return withLoading(async () => {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
         const targetPubkey = new PublicKey(address);
-
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-        const [configPubkey] = await PublicKey.findProgramAddress(
-          [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const [blacklistEntry] = await PublicKey.findProgramAddress(
-          [
-            Buffer.from("blacklist"),
-            configPubkey.toBuffer(),
-            targetPubkey.toBuffer(),
-          ],
-          new PublicKey(PROGRAM_ID)
-        );
-
-        const discriminator = getInstructionDiscriminator("blacklist_remove");
-        console.log(
-          "blacklist_remove discriminator:",
-          discriminator.toString("hex")
+        const [configPubkey] = await getConfigPda(mintPubkey);
+        const [blacklistEntry] = await getBlacklistPda(
+          configPubkey,
+          targetPubkey
         );
 
         const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
+          programId: PROGRAM_ID,
           keys: [
             { pubkey: blacklistEntry, isWritable: true, isSigner: false },
             { pubkey: configPubkey, isWritable: true, isSigner: false },
@@ -671,7 +483,7 @@ export function useSolana() {
             { pubkey: targetPubkey, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: true, isSigner: false },
           ],
-          data: discriminator,
+          data: getInstructionDiscriminator("blacklist_remove"),
         });
 
         const tx = new Transaction().add(ix);
@@ -683,22 +495,193 @@ export function useSolana() {
           signed.serialize()
         );
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Address removed from blacklist! Signature:", signature);
-
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error
-            ? err.message
-            : "Failed to remove from blacklist";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading]
   );
+
+  // ─── freeze ───────────────────────────────────────────────────────────────
+
+  const freeze = useCallback(
+    async (token: SssToken, walletAddr: string) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+        const accountPubkey = await getAssociatedTokenAddress(
+          mintPubkey,
+          new PublicKey(walletAddr),
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: accountPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: TOKEN_2022_PROGRAM_ID,
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: getInstructionDiscriminator("freeze_account"),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
+
+  // ─── thaw ─────────────────────────────────────────────────────────────────
+
+  const thaw = useCallback(
+    async (token: SssToken, walletAddr: string) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+        const accountPubkey = await getAssociatedTokenAddress(
+          mintPubkey,
+          new PublicKey(walletAddr),
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: accountPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: TOKEN_2022_PROGRAM_ID,
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: getInstructionDiscriminator("thaw_account"),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
+
+  // ─── mint ─────────────────────────────────────────────────────────────────
+
+  const mint = useCallback(
+    async (token: SssToken, recipientAddress: string, amount: number) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+      if (!recipientAddress?.trim())
+        throw new Error("Recipient address is required");
+
+      let recipientPubkey: PublicKey;
+      try {
+        recipientPubkey = new PublicKey(recipientAddress);
+      } catch {
+        throw new Error("Invalid recipient address format");
+      }
+      if (!PublicKey.isOnCurve(recipientPubkey))
+        throw new Error(
+          "Recipient must be a valid wallet address (Ed25519 key)"
+        );
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const signer = buildSigner();
+
+        const ata = await getAssociatedTokenAddress(
+          mintPubkey,
+          recipientPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        // Create ATA if it doesn't exist
+        let ataExists = false;
+        try {
+          await getAccount(connection, ata);
+          ataExists = true;
+        } catch {
+          // ATA doesn't exist
+        }
+
+        if (!ataExists) {
+          const createAtaIx = createAssociatedTokenAccountInstruction(
+            authorityPubkey,
+            ata,
+            recipientPubkey,
+            mintPubkey,
+            TOKEN_2022_PROGRAM_ID
+          );
+          const ataTx = new Transaction().add(createAtaIx);
+          ataTx.feePayer = authorityPubkey;
+          ataTx.recentBlockhash = (
+            await connection.getLatestBlockhash()
+          ).blockhash;
+          const signedAta = await wallet.signTransaction(ataTx);
+          const ataSig = await connection.sendRawTransaction(
+            signedAta.serialize(),
+            { skipPreflight: true }
+          );
+          await connection.confirmTransaction(ataSig, "confirmed");
+        }
+
+        const stablecoin = await SolanaStablecoin.fetch(connection, mintPubkey);
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const amountInSmallest = Math.floor(
+          amount * Math.pow(10, token.decimals)
+        );
+
+        const signature = await stablecoin.mint({
+          recipient: ata,
+          amount: amountInSmallest,
+          minter: signer,
+        });
+
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── seize ────────────────────────────────────────────────────────────────
 
   const seize = useCallback(
     async (
@@ -707,24 +690,15 @@ export function useSolana() {
       toWallet: string,
       amount: number
     ) => {
-      const configPubkey = new PublicKey(token.config);
-      const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-
-      if (!connected || !wallet || !publicKey) {
+      if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
-      }
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
+      return withLoading(async () => {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
+        const configPubkey = new PublicKey(token.config);
         const fromWalletPubkey = new PublicKey(fromWallet);
         const toWalletPubkey = new PublicKey(toWallet);
-
-        const { getAssociatedTokenAddress, TOKEN_2022_PROGRAM_ID } =
-          await import("@solana/spl-token");
 
         const fromAta = await getAssociatedTokenAddress(
           mintPubkey,
@@ -738,35 +712,22 @@ export function useSolana() {
           false,
           TOKEN_2022_PROGRAM_ID
         );
-
-        const [blacklistPDA] = await PublicKey.findProgramAddress(
-          [
-            Buffer.from("blacklist"),
-            configPubkey.toBuffer(),
-            fromWalletPubkey.toBuffer(),
-          ],
-          new PublicKey(PROGRAM_ID)
+        const [blacklistPDA] = await getBlacklistPda(
+          configPubkey,
+          fromWalletPubkey
         );
 
         const fromAtaInfo = await connection.getAccountInfo(fromAta);
-        if (!fromAtaInfo) {
+        if (!fromAtaInfo)
           throw new Error("Source token account does not exist");
-        }
 
         const toAtaInfo = await connection.getAccountInfo(toAta);
 
-        const discriminator = getInstructionDiscriminator("seize");
-
         const amountBuffer = Buffer.alloc(8);
-        const view = new DataView(
-          amountBuffer.buffer,
-          amountBuffer.byteOffset,
-          8
-        );
-        view.setBigUint64(0, BigInt(amount), true);
+        new DataView(amountBuffer.buffer).setBigUint64(0, BigInt(amount), true);
 
         const ix = new TransactionInstruction({
-          programId: new PublicKey(PROGRAM_ID),
+          programId: PROGRAM_ID,
           keys: [
             { pubkey: configPubkey, isWritable: false, isSigner: false },
             { pubkey: mintPubkey, isWritable: false, isSigner: false },
@@ -780,23 +741,24 @@ export function useSolana() {
               isSigner: false,
             },
           ],
-          data: Buffer.concat([discriminator, amountBuffer]),
+          data: Buffer.concat([
+            getInstructionDiscriminator("seize"),
+            amountBuffer,
+          ]),
         });
 
         const tx = new Transaction();
 
         if (!toAtaInfo) {
-          const { createAssociatedTokenAccountInstruction } = await import(
-            "@solana/spl-token"
+          tx.add(
+            createAssociatedTokenAccountInstruction(
+              authorityPubkey,
+              toAta,
+              toWalletPubkey,
+              mintPubkey,
+              TOKEN_2022_PROGRAM_ID
+            )
           );
-          const createToAtaIx = createAssociatedTokenAccountInstruction(
-            authorityPubkey,
-            toAta,
-            toWalletPubkey,
-            mintPubkey,
-            TOKEN_2022_PROGRAM_ID
-          );
-          tx.add(createToAtaIx);
         }
 
         tx.add(ix);
@@ -808,269 +770,26 @@ export function useSolana() {
           signed.serialize()
         );
         await connection.confirmTransaction(signature, "confirmed");
-        console.log("Tokens seized! Signature:", signature);
-
         return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to seize tokens";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
+      });
     },
-    [connected, wallet, publicKey, connection]
+    [connected, wallet, publicKey, connection, withLoading]
   );
 
-  const fetchBlacklistHistory = useCallback(
+  // ─── addToken (local state helper) ───────────────────────────────────────
+
+  const addToken = useCallback((token: SssToken) => {
+    setTokens((prev) => {
+      if (prev.some((t) => t.mint === token.mint)) return prev;
+      return [...prev, token];
+    });
+  }, []);
+
+  // ─── fetchMintHistory ─────────────────────────────────────────────────────
+
+  const fetchMintHistory = useCallback(
     async (token: SssToken) => {
       if (!connected) return [];
-
-      try {
-        const configPubkey = new PublicKey(token.config);
-
-        const signatures = await connection.getSignaturesForAddress(
-          configPubkey,
-          { limit: 20 }
-        );
-
-        const history: {
-          address: string;
-          addressFull: string;
-          action: "add" | "remove";
-          reason?: string;
-          txn: string;
-          time: string;
-        }[] = [];
-
-        const accountActions: Map<
-          string,
-          {
-            action: "add" | "remove";
-            reason?: string;
-            time: string;
-            txn: string;
-          }
-        > = new Map();
-
-        const blacklistAddDiscriminator = "03c44e886fc5bc72";
-
-        for (const sig of signatures) {
-          try {
-            const tx = await connection.getParsedTransaction(sig.signature, {
-              maxSupportedTransactionVersion: 0,
-            });
-            if (!tx?.meta?.logMessages) continue;
-
-            for (const log of tx.meta.logMessages) {
-              if (log.includes("Program data:")) {
-                try {
-                  const dataBase64 = log.replace("Program data: ", "");
-                  const dataBuffer = Buffer.from(dataBase64, "base64");
-
-                  if (dataBuffer.length < 8) continue;
-
-                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
-
-                  if (discriminator === blacklistAddDiscriminator) {
-                    let reason;
-                    if (dataBuffer.length > 8) {
-                      const reasonLength = dataBuffer.readUInt32LE(8);
-                      const reasonBuffer = dataBuffer.slice(
-                        12,
-                        12 + reasonLength
-                      );
-                      reason = reasonBuffer.toString("utf8");
-                    }
-
-                    let address = "";
-                    if (tx.transaction.message.accountKeys) {
-                      const accounts = tx.transaction.message.accountKeys;
-                      const accountKeys = Array.isArray(accounts)
-                        ? accounts
-                        : Object.values(accounts);
-                      if (accountKeys.length > 5) {
-                        const targetAcc = accountKeys[5];
-                        address =
-                          typeof targetAcc === "string"
-                            ? targetAcc
-                            : targetAcc.pubkey;
-                      }
-                    }
-
-                    if (address) {
-                      accountActions.set(address, {
-                        action: "add",
-                        reason,
-                        txn: `${sig.signature.slice(
-                          0,
-                          4
-                        )}...${sig.signature.slice(-4)}`,
-                        time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
-                      });
-                    }
-                  }
-                } catch (e) {
-                  console.error("Error parsing blacklist event:", e);
-                }
-              }
-            }
-          } catch {
-            // Skip failed transactions
-          }
-        }
-
-        for (const [address, data] of accountActions) {
-          if (data.action === "add") {
-            history.push({
-              address: `${address.slice(0, 4)}...${address.slice(-4)}`,
-              addressFull: address,
-              action: "add",
-              reason: data.reason,
-              txn: data.txn,
-              time: data.time,
-            });
-          }
-        }
-
-        return history;
-      } catch (err) {
-        console.error("Error fetching blacklist history:", err);
-        return [];
-      }
-    },
-    [connected, connection]
-  );
-
-  const fetchBlacklistEntries = useCallback(
-    async (token: SssToken) => {
-      if (!connected) return [];
-
-      try {
-        const configPubkey = new PublicKey(token.config);
-        const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
-
-        const signatures = await connection.getSignaturesForAddress(
-          configPubkey,
-          { limit: 50 }
-        );
-
-        const entries: Map<string, { target: string; reason?: string }> =
-          new Map();
-        const blacklistAddDiscriminator = "03c44e886fc5bc72";
-
-        for (const sig of signatures) {
-          try {
-            const tx = await connection.getParsedTransaction(sig.signature, {
-              maxSupportedTransactionVersion: 0,
-            });
-            if (!tx?.meta?.logMessages) continue;
-
-            for (const log of tx.meta.logMessages) {
-              if (log.includes("Program data:")) {
-                try {
-                  const dataBase64 = log.replace("Program data: ", "");
-                  const dataBuffer = Buffer.from(dataBase64, "base64");
-
-                  if (dataBuffer.length < 8) continue;
-
-                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                  console.log("Found discriminator:", discriminator);
-
-                  if (discriminator === blacklistAddDiscriminator) {
-                    if (tx.transaction.message.accountKeys) {
-                      const accounts = tx.transaction.message.accountKeys;
-                      const accountKeys = Array.isArray(accounts)
-                        ? accounts
-                        : Object.values(accounts);
-
-                      let reason;
-                      if (dataBuffer.length > 8) {
-                        const reasonLength = dataBuffer.readUInt32LE(8);
-                        if (
-                          reasonLength > 0 &&
-                          reasonLength < 200 &&
-                          dataBuffer.length > 12
-                        ) {
-                          const reasonBuffer = dataBuffer.slice(
-                            12,
-                            12 + reasonLength
-                          );
-                          reason = reasonBuffer.toString("utf8");
-                        }
-                      }
-
-                      if (accountKeys.length > 4) {
-                        const targetAcc = accountKeys[4];
-                        const target =
-                          typeof targetAcc === "string"
-                            ? targetAcc
-                            : targetAcc.pubkey;
-                        const targetStr = target.toString();
-                        entries.set(targetStr, { target: targetStr, reason });
-                      }
-                    }
-                  }
-                } catch (e) {
-                  // Skip
-                }
-              }
-            }
-          } catch {
-            // Skip
-          }
-        }
-
-        const result: {
-          address: string;
-          addressFull: string;
-          reason?: string;
-          txn: string;
-          time: string;
-        }[] = [];
-
-        for (const entry of entries.values()) {
-          try {
-            const [blacklistPDA] = await PublicKey.findProgramAddress(
-              [
-                Buffer.from("blacklist"),
-                configPubkey.toBuffer(),
-                new PublicKey(entry.target).toBuffer(),
-              ],
-              new PublicKey(PROGRAM_ID)
-            );
-
-            const accountInfo = await connection.getAccountInfo(blacklistPDA);
-            if (accountInfo && accountInfo.data.length > 0) {
-              result.push({
-                address: `${entry.target.slice(0, 4)}...${entry.target.slice(
-                  -4
-                )}`,
-                addressFull: entry.target,
-                reason: entry.reason,
-                txn: "",
-                time: "",
-              });
-            }
-          } catch (e) {
-            // Skip - account doesn't exist
-          }
-        }
-
-        return result;
-      } catch (err) {
-        console.error("Error fetching blacklist entries:", err);
-        return [];
-      }
-    },
-    [connected, connection]
-  );
-
-  const fetchFreezeHistory = useCallback(
-    async (token: SssToken) => {
-      if (!connected) return [];
-
       try {
         const mintPubkey = new PublicKey(token.mint);
         const signatures = await connection.getSignaturesForAddress(
@@ -1079,12 +798,78 @@ export function useSolana() {
         );
 
         const history: {
-          account: string;
-          accountFull: string;
-          action: "freeze" | "thaw";
+          amount: string;
+          to: string;
           txn: string;
           time: string;
         }[] = [];
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (!log.includes("Program data:")) continue;
+              try {
+                const dataBuffer = Buffer.from(
+                  log.replace("Program data: ", ""),
+                  "base64"
+                );
+                if (dataBuffer.length < 8) continue;
+
+                const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                if (discriminator !== "cfd480c2af364018") continue;
+
+                const to = new PublicKey(dataBuffer.slice(40, 72)).toString();
+                const amount = new DataView(
+                  dataBuffer.buffer,
+                  dataBuffer.byteOffset
+                ).getBigUint64(72, true);
+                const amountFormatted =
+                  Number(amount) / Math.pow(10, token.decimals);
+
+                history.push({
+                  amount: `+${amountFormatted.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}`,
+                  to: `${to.slice(0, 4)}...${to.slice(-4)}`,
+                  txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(
+                    -4
+                  )}`,
+                  time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                });
+              } catch {
+                // skip malformed log
+              }
+            }
+          } catch {
+            // skip failed tx
+          }
+        }
+        return history;
+      } catch (err) {
+        console.error("Error fetching mint history:", err);
+        return [];
+      }
+    },
+    [connected, connection]
+  );
+
+  // ─── fetchFreezeHistory ───────────────────────────────────────────────────
+
+  const fetchFreezeHistory = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+      try {
+        const mintPubkey = new PublicKey(token.mint);
+        const signatures = await connection.getSignaturesForAddress(
+          mintPubkey,
+          { limit: 20 }
+        );
 
         const accountActions: Map<
           string,
@@ -1099,65 +884,55 @@ export function useSolana() {
             if (!tx?.meta?.logMessages) continue;
 
             for (const log of tx.meta.logMessages) {
-              if (log.includes("Program data:")) {
-                try {
-                  const dataBase64 = log.replace("Program data: ", "");
-                  const dataBuffer = Buffer.from(dataBase64, "base64");
+              if (!log.includes("Program data:")) continue;
+              try {
+                const dataBuffer = Buffer.from(
+                  log.replace("Program data: ", ""),
+                  "base64"
+                );
+                if (dataBuffer.length < 40) continue;
 
-                  if (dataBuffer.length < 8) continue;
+                const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                const account = new PublicKey(
+                  dataBuffer.slice(8, 40)
+                ).toString();
+                const txnShort = `${sig.signature.slice(
+                  0,
+                  4
+                )}...${sig.signature.slice(-4)}`;
+                const time = sig.blockTime ? getTimeAgo(sig.blockTime) : "";
 
-                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
-
-                  if (discriminator === "ddd63b1df63277ce") {
-                    const account = new PublicKey(
-                      dataBuffer.slice(8, 40)
-                    ).toString();
-
-                    accountActions.set(account, {
-                      action: "freeze",
-                      txn: `${sig.signature.slice(
-                        0,
-                        4
-                      )}...${sig.signature.slice(-4)}`,
-                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
-                    });
-                  } else if (discriminator === "313f496981be2877") {
-                    const account = new PublicKey(
-                      dataBuffer.slice(8, 40)
-                    ).toString();
-
-                    accountActions.set(account, {
-                      action: "thaw",
-                      txn: `${sig.signature.slice(
-                        0,
-                        4
-                      )}...${sig.signature.slice(-4)}`,
-                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
-                    });
-                  }
-                } catch (e) {
-                  console.error("Error parsing freeze event:", e);
+                if (discriminator === "ddd63b1df63277ce") {
+                  accountActions.set(account, {
+                    action: "freeze",
+                    txn: txnShort,
+                    time,
+                  });
+                } else if (discriminator === "313f496981be2877") {
+                  accountActions.set(account, {
+                    action: "thaw",
+                    txn: txnShort,
+                    time,
+                  });
                 }
+              } catch {
+                // skip malformed log
               }
             }
           } catch {
-            // Skip failed transactions
+            // skip failed tx
           }
         }
 
-        for (const [account, data] of accountActions) {
-          if (data.action === "freeze") {
-            history.push({
-              account: `${account.slice(0, 4)}...${account.slice(-4)}`,
-              accountFull: account,
-              action: "freeze",
-              txn: data.txn,
-              time: data.time,
-            });
-          }
-        }
-
-        return history;
+        return [...accountActions.entries()]
+          .filter(([, data]) => data.action === "freeze")
+          .map(([account, data]) => ({
+            account: `${account.slice(0, 4)}...${account.slice(-4)}`,
+            accountFull: account,
+            action: "freeze" as const,
+            txn: data.txn,
+            time: data.time,
+          }));
       } catch (err) {
         console.error("Error fetching freeze history:", err);
         return [];
@@ -1166,10 +941,11 @@ export function useSolana() {
     [connected, connection]
   );
 
+  // ─── fetchSeizeHistory ────────────────────────────────────────────────────
+
   const fetchSeizeHistory = useCallback(
     async (token: SssToken) => {
       if (!connected) return [];
-
       try {
         const mintPubkey = new PublicKey(token.mint);
         const signatures = await connection.getSignaturesForAddress(
@@ -1177,14 +953,8 @@ export function useSolana() {
           { limit: 20 }
         );
 
-        const history: {
-          from: string;
-          fromFull: string;
-          to: string;
-          amount: string;
-          txn: string;
-          time: string;
-        }[] = [];
+        const seizeDiscriminator =
+          getInstructionDiscriminator("seize").toString("hex");
 
         const seizeActions: Map<
           string,
@@ -1197,9 +967,6 @@ export function useSolana() {
           }
         > = new Map();
 
-        const seizeDiscriminator =
-          getInstructionDiscriminator("seize").toString("hex");
-
         for (const sig of signatures) {
           try {
             const tx = await connection.getParsedTransaction(sig.signature, {
@@ -1208,67 +975,55 @@ export function useSolana() {
             if (!tx?.meta?.logMessages) continue;
 
             for (const log of tx.meta.logMessages) {
-              if (log.includes("Program data:")) {
-                try {
-                  const dataBase64 = log.replace("Program data: ", "");
-                  const dataBuffer = Buffer.from(dataBase64, "base64");
+              if (!log.includes("Program data:")) continue;
+              try {
+                const dataBuffer = Buffer.from(
+                  log.replace("Program data: ", ""),
+                  "base64"
+                );
+                if (dataBuffer.length < 80) continue;
 
-                  if (dataBuffer.length < 8) continue;
+                const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                if (discriminator !== seizeDiscriminator) continue;
 
-                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                const from = new PublicKey(dataBuffer.slice(8, 40)).toString();
+                const to = new PublicKey(dataBuffer.slice(40, 72)).toString();
+                const amount = new DataView(
+                  dataBuffer.buffer,
+                  dataBuffer.byteOffset
+                ).getBigUint64(72, true);
+                const amountFormatted =
+                  Number(amount) / Math.pow(10, token.decimals);
 
-                  if (discriminator === seizeDiscriminator) {
-                    const from = new PublicKey(
-                      dataBuffer.slice(8, 40)
-                    ).toString();
-                    const to = new PublicKey(
-                      dataBuffer.slice(40, 72)
-                    ).toString();
-                    const dataView = new DataView(
-                      dataBuffer.buffer,
-                      dataBuffer.byteOffset,
-                      dataBuffer.byteLength
-                    );
-                    const amount = dataView.getBigUint64(72, true);
-                    const amountFormatted =
-                      Number(amount) / Math.pow(10, token.decimals);
-
-                    seizeActions.set(from, {
-                      from,
-                      to,
-                      amount: amountFormatted.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      }),
-                      txn: `${sig.signature.slice(
-                        0,
-                        4
-                      )}...${sig.signature.slice(-4)}`,
-                      time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
-                    });
-                  }
-                } catch (e) {
-                  console.error("Error parsing seize event:", e);
-                }
+                seizeActions.set(from, {
+                  from,
+                  to,
+                  amount: amountFormatted.toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }),
+                  txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(
+                    -4
+                  )}`,
+                  time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+                });
+              } catch {
+                // skip malformed log
               }
             }
           } catch {
-            // Skip failed transactions
+            // skip failed tx
           }
         }
 
-        for (const [from, data] of seizeActions) {
-          history.push({
-            from: `${from.slice(0, 4)}...${from.slice(-4)}`,
-            fromFull: from,
-            to: data.to,
-            amount: data.amount,
-            txn: data.txn,
-            time: data.time,
-          });
-        }
-
-        return history;
+        return [...seizeActions.values()].map((data) => ({
+          from: `${data.from.slice(0, 4)}...${data.from.slice(-4)}`,
+          fromFull: data.from,
+          to: data.to,
+          amount: data.amount,
+          txn: data.txn,
+          time: data.time,
+        }));
       } catch (err) {
         console.error("Error fetching seize history:", err);
         return [];
@@ -1277,185 +1032,28 @@ export function useSolana() {
     [connected, connection]
   );
 
-  const sendTransaction = useCallback(
-    async (transaction: unknown) => {
-      if (!connected || !wallet) {
-        throw new Error("Wallet not connected");
-      }
+  // ─── fetchBlacklistHistory ────────────────────────────────────────────────
 
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        if (wallet.signTransaction) {
-          const signed = await wallet.signTransaction(transaction);
-          return signed.signature ? Array.from(signed.signature) : [];
-        }
-        throw new Error("Wallet does not support transaction signing");
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Transaction failed";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [connected, wallet]
-  );
-
-  const mint = useCallback(
-    async (token: SssToken, recipientAddress: string, amount: number) => {
-      if (!connected || !wallet || !publicKey) {
-        throw new Error("Wallet not connected");
-      }
-
-      if (!recipientAddress || recipientAddress.trim() === "") {
-        throw new Error("Recipient address is required");
-      }
-
-      let recipientPubkey: PublicKey;
-      try {
-        recipientPubkey = new PublicKey(recipientAddress);
-      } catch {
-        throw new Error("Invalid recipient address format");
-      }
-
-      if (!PublicKey.isOnCurve(recipientPubkey)) {
-        throw new Error(
-          "Recipient must be a valid wallet address (Ed25519 key)"
-        );
-      }
-
-      setIsLoading(true);
-      setError(null);
-
-      try {
-        const authorityPubkey = new PublicKey(publicKey);
-        const mintPubkey = new PublicKey(token.mint);
-
-        console.log("Authority:", authorityPubkey.toBase58());
-        console.log("Recipient:", recipientPubkey.toBase58());
-        console.log("Mint:", mintPubkey.toBase58());
-
-        const configPubkey = new PublicKey(token.config);
-        console.log("Config from token:", token.config);
-
-        const stablecoin = new SolanaStablecoin(
-          connection,
-          mintPubkey,
-          configPubkey,
-          authorityPubkey,
-          token.preset as 0 | 1
-        );
-
-        const {
-          getAssociatedTokenAddress,
-          getAccount,
-          createAssociatedTokenAccountInstruction,
-          TOKEN_2022_PROGRAM_ID,
-        } = await import("@solana/spl-token");
-
-        console.log("TOKEN_2022_PROGRAM_ID:", TOKEN_2022_PROGRAM_ID.toString());
-
-        const ata = await getAssociatedTokenAddress(
-          mintPubkey,
-          recipientPubkey,
-          false,
-          TOKEN_2022_PROGRAM_ID
-        );
-        console.log("ATA:", ata.toBase58());
-
-        let ataExists = false;
-        try {
-          await getAccount(connection, ata);
-          ataExists = true;
-          console.log("ATA exists");
-        } catch {
-          console.log("ATA does not exist, creating...");
-        }
-
-        if (!ataExists) {
-          const createAtaIx = createAssociatedTokenAccountInstruction(
-            authorityPubkey,
-            ata,
-            recipientPubkey,
-            mintPubkey,
-            TOKEN_2022_PROGRAM_ID
-          );
-
-          const tx = new Transaction().add(createAtaIx);
-          tx.feePayer = authorityPubkey;
-          tx.recentBlockhash = (
-            await connection.getLatestBlockhash()
-          ).blockhash;
-
-          const signed = await wallet.signTransaction(tx);
-          const sig = await connection.sendRawTransaction(signed.serialize(), {
-            skipPreflight: true,
-          });
-          await connection.confirmTransaction(sig, "confirmed");
-          console.log("ATA created!");
-        }
-
-        console.log(
-          "Minting - amount:",
-          amount,
-          "decimals:",
-          token.decimals,
-          "result:",
-          amount * Math.pow(10, token.decimals)
-        );
-        const amountInSmallest = Math.floor(
-          amount * Math.pow(10, token.decimals)
-        );
-        console.log("Amount in smallest units:", amountInSmallest);
-
-        const signature = await stablecoin.mint({
-          recipient: ata,
-          amount: amountInSmallest,
-          minter: {
-            publicKey: authorityPubkey,
-            signTransaction: async (tx) => {
-              if (!wallet) throw new Error("Wallet not connected");
-              return wallet.signTransaction(tx);
-            },
-          },
-        });
-
-        await connection.confirmTransaction(signature, "confirmed");
-        console.log("Tokens minted! Signature:", signature);
-
-        return signature;
-      } catch (err) {
-        const errorMsg =
-          err instanceof Error ? err.message : "Failed to mint tokens";
-        setError(errorMsg);
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [connected, wallet, publicKey, connection]
-  );
-
-  const fetchMintHistory = useCallback(
+  const fetchBlacklistHistory = useCallback(
     async (token: SssToken) => {
       if (!connected) return [];
-
       try {
-        const mintPubkey = new PublicKey(token.mint);
+        const configPubkey = new PublicKey(token.config);
         const signatures = await connection.getSignaturesForAddress(
-          mintPubkey,
+          configPubkey,
           { limit: 20 }
         );
 
-        const history: {
-          amount: string;
-          to: string;
-          txn: string;
-          time: string;
-        }[] = [];
+        const blacklistAddDiscriminator = "03c44e886fc5bc72";
+        const accountActions: Map<
+          string,
+          {
+            action: "add" | "remove";
+            reason?: string;
+            time: string;
+            txn: string;
+          }
+        > = new Map();
 
         for (const sig of signatures) {
           try {
@@ -1465,38 +1063,41 @@ export function useSolana() {
             if (!tx?.meta?.logMessages) continue;
 
             for (const log of tx.meta.logMessages) {
-              if (log.includes("Program data:")) {
-                try {
-                  const dataBase64 = log.replace("Program data: ", "");
-                  const dataBuffer = Buffer.from(dataBase64, "base64");
-                  const dataView = new DataView(
-                    dataBuffer.buffer,
-                    dataBuffer.byteOffset,
-                    dataBuffer.byteLength
-                  );
+              if (!log.includes("Program data:")) continue;
+              try {
+                const dataBuffer = Buffer.from(
+                  log.replace("Program data: ", ""),
+                  "base64"
+                );
+                if (dataBuffer.length < 8) continue;
 
-                  const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                if (discriminator !== blacklistAddDiscriminator) continue;
 
-                  if (discriminator === "cfd480c2af364018") {
-                    const mint = new PublicKey(
-                      dataBuffer.slice(8, 40)
-                    ).toString();
-                    const to = new PublicKey(
-                      dataBuffer.slice(40, 72)
-                    ).toString();
-                    const amount = dataView.getBigUint64(72, true);
-                    const minter = new PublicKey(
-                      dataBuffer.slice(80, 112)
-                    ).toString();
+                let reason: string | undefined;
+                if (dataBuffer.length > 12) {
+                  const reasonLength = dataBuffer.readUInt32LE(8);
+                  if (reasonLength > 0 && reasonLength < 200) {
+                    reason = dataBuffer
+                      .slice(12, 12 + reasonLength)
+                      .toString("utf8");
+                  }
+                }
 
-                    const amountFormatted =
-                      Number(amount) / Math.pow(10, token.decimals);
-                    history.push({
-                      amount: `+${amountFormatted.toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}`,
-                      to: `${to.slice(0, 4)}...${to.slice(-4)}`,
+                const accountKeys = tx.transaction.message.accountKeys;
+                const keys = Array.isArray(accountKeys)
+                  ? accountKeys
+                  : Object.values(accountKeys);
+                if (keys.length > 5) {
+                  const targetAcc = keys[5];
+                  const address =
+                    typeof targetAcc === "string"
+                      ? targetAcc
+                      : targetAcc.pubkey;
+                  if (address) {
+                    accountActions.set(address.toString(), {
+                      action: "add",
+                      reason,
                       txn: `${sig.signature.slice(
                         0,
                         4
@@ -1504,39 +1105,142 @@ export function useSolana() {
                       time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                     });
                   }
-                } catch (e) {
-                  console.error("Error parsing event:", e);
                 }
+              } catch {
+                // skip malformed log
               }
             }
           } catch {
-            // Skip failed transactions
+            // skip failed tx
           }
         }
 
-        return history;
+        return [...accountActions.entries()]
+          .filter(([, data]) => data.action === "add")
+          .map(([address, data]) => ({
+            address: `${address.slice(0, 4)}...${address.slice(-4)}`,
+            addressFull: address,
+            action: "add" as const,
+            reason: data.reason,
+            txn: data.txn,
+            time: data.time,
+          }));
       } catch (err) {
-        console.error("Error fetching mint history:", err);
+        console.error("Error fetching blacklist history:", err);
         return [];
       }
     },
     [connected, connection]
   );
 
-  const getTimeAgo = (timestamp: number): string => {
-    const seconds = Math.floor(Date.now() / 1000 - timestamp);
-    if (seconds < 60) return `${seconds}s ago`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-    return `${Math.floor(seconds / 86400)}d ago`;
-  };
+  // ─── fetchBlacklistEntries ────────────────────────────────────────────────
 
-  const addToken = useCallback((token: SssToken) => {
-    setTokens((prev) => {
-      if (prev.some((t) => t.mint === token.mint)) return prev;
-      return [...prev, token];
-    });
-  }, []);
+  const fetchBlacklistEntries = useCallback(
+    async (token: SssToken) => {
+      if (!connected) return [];
+      try {
+        const configPubkey = new PublicKey(token.config);
+        const signatures = await connection.getSignaturesForAddress(
+          configPubkey,
+          { limit: 50 }
+        );
+
+        const blacklistAddDiscriminator = "03c44e886fc5bc72";
+        const entries: Map<string, { target: string; reason?: string }> =
+          new Map();
+
+        for (const sig of signatures) {
+          try {
+            const tx = await connection.getParsedTransaction(sig.signature, {
+              maxSupportedTransactionVersion: 0,
+            });
+            if (!tx?.meta?.logMessages) continue;
+
+            for (const log of tx.meta.logMessages) {
+              if (!log.includes("Program data:")) continue;
+              try {
+                const dataBuffer = Buffer.from(
+                  log.replace("Program data: ", ""),
+                  "base64"
+                );
+                if (dataBuffer.length < 8) continue;
+
+                const discriminator = dataBuffer.slice(0, 8).toString("hex");
+                if (discriminator !== blacklistAddDiscriminator) continue;
+
+                let reason: string | undefined;
+                if (dataBuffer.length > 12) {
+                  const reasonLength = dataBuffer.readUInt32LE(8);
+                  if (reasonLength > 0 && reasonLength < 200) {
+                    reason = dataBuffer
+                      .slice(12, 12 + reasonLength)
+                      .toString("utf8");
+                  }
+                }
+
+                const accountKeys = tx.transaction.message.accountKeys;
+                const keys = Array.isArray(accountKeys)
+                  ? accountKeys
+                  : Object.values(accountKeys);
+                if (keys.length > 4) {
+                  const targetAcc = keys[4];
+                  const target =
+                    typeof targetAcc === "string"
+                      ? targetAcc
+                      : targetAcc.pubkey;
+                  const targetStr = target.toString();
+                  entries.set(targetStr, { target: targetStr, reason });
+                }
+              } catch {
+                // skip
+              }
+            }
+          } catch {
+            // skip
+          }
+        }
+
+        const result: {
+          address: string;
+          addressFull: string;
+          reason?: string;
+          txn: string;
+          time: string;
+        }[] = [];
+
+        for (const entry of entries.values()) {
+          try {
+            const [blacklistPDA] = await getBlacklistPda(
+              configPubkey,
+              new PublicKey(entry.target)
+            );
+            const accountInfo = await connection.getAccountInfo(blacklistPDA);
+            if (accountInfo && accountInfo.data.length > 0) {
+              result.push({
+                address: `${entry.target.slice(0, 4)}...${entry.target.slice(
+                  -4
+                )}`,
+                addressFull: entry.target,
+                reason: entry.reason,
+                txn: "",
+                time: "",
+              });
+            }
+          } catch {
+            // skip — account doesn't exist
+          }
+        }
+
+        return result;
+      } catch (err) {
+        console.error("Error fetching blacklist entries:", err);
+        return [];
+      }
+    },
+    [connected, connection]
+  );
+
+  // ─── Return ───────────────────────────────────────────────────────────────
 
   return {
     connected,
@@ -1544,7 +1248,6 @@ export function useSolana() {
     publicKey,
     connectWallet,
     disconnectWallet,
-    sendTransaction,
     getBalance,
     createToken,
     addMinter,
@@ -1556,12 +1259,12 @@ export function useSolana() {
     freeze,
     thaw,
     mint,
+    addToken,
     fetchMintHistory,
     fetchFreezeHistory,
     fetchSeizeHistory,
     fetchBlacklistHistory,
     fetchBlacklistEntries,
-    addToken,
     isLoading,
     error,
     tokens,

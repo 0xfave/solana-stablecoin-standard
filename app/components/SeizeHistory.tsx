@@ -49,6 +49,8 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
     try {
       const amountInSmallestUnits = Math.floor(parseFloat(amount) * Math.pow(10, token.decimals));
       await seize(token, fromAddress, toAddress, amountInSmallestUnits);
+        
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       const updatedHistory = await fetchSeizeHistory(token);
       setHistory(updatedHistory);
       setShowModal(false);

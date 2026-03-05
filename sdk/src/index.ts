@@ -6,11 +6,11 @@ import {
   SystemProgram,
   Keypair,
 } from "@solana/web3.js";
-import { 
-  ExtensionType, 
+import {
+  ExtensionType,
   getMintLen,
   createInitializePermanentDelegateInstruction,
-  createInitializeMintInstruction 
+  createInitializeMintInstruction,
 } from "@solana/spl-token";
 import { createHash } from "crypto";
 
@@ -103,7 +103,7 @@ export class SolanaStablecoin {
   static async create(
     connection: Connection,
     params: CreateStablecoinParams
-  ): Promise<SolanaStablecoin> {      
+  ): Promise<SolanaStablecoin> {
     const { preset, authority, decimals, supplyCap } = params;
 
     const mintKeypair = Keypair.generate();
@@ -115,11 +115,12 @@ export class SolanaStablecoin {
     const tx = new Transaction();
 
     // Calculate mint space - larger if preset=1 (SSS-2) needs Permanent Delegate extension
-    const extensions = preset === PRESET.SSS_2 
-      ? [ExtensionType.PermanentDelegate] 
-      : [];
+    const extensions =
+      preset === PRESET.SSS_2 ? [ExtensionType.PermanentDelegate] : [];
     const mintSpace = getMintLen(extensions);
-    const lamports = await connection.getMinimumBalanceForRentExemption(mintSpace);
+    const lamports = await connection.getMinimumBalanceForRentExemption(
+      mintSpace
+    );
 
     tx.add(
       SystemProgram.createAccount({
@@ -130,26 +131,26 @@ export class SolanaStablecoin {
         programId: new PublicKey(TOKEN_2022_PROGRAM_ID),
       })
     );
-    
+
     // For preset=1 (SSS-2), add Permanent Delegate extension
     if (preset === PRESET.SSS_2) {
-      const initPermanentDelegateIx = createInitializePermanentDelegateInstruction(
-        mintKeypair.publicKey,
-        config,
-        new PublicKey(TOKEN_2022_PROGRAM_ID)
-      );
+      const initPermanentDelegateIx =
+        createInitializePermanentDelegateInstruction(
+          mintKeypair.publicKey,
+          config,
+          new PublicKey(TOKEN_2022_PROGRAM_ID)
+        );
       tx.add(initPermanentDelegateIx);
     }
-      
+
     const initMintIx = createInitializeMintInstruction(
       mintKeypair.publicKey,
       decimals,
-      authority.publicKey,        // temporary mint authority (will be changed by program)
-      authority.publicKey,        // temporary freeze authority
+      authority.publicKey, // temporary mint authority (will be changed by program)
+      authority.publicKey, // temporary freeze authority
       new PublicKey(TOKEN_2022_PROGRAM_ID)
     );
     tx.add(initMintIx);
-
 
     const initIx = new TransactionInstruction({
       programId: new PublicKey(PROGRAM_ID),
@@ -213,13 +214,13 @@ export class SolanaStablecoin {
     if (!configInfo?.data) return null;
 
     const data = configInfo.data;
-    const discriminator = data.readUInt32LE(0);
-    if (discriminator !== 1393578635) return null;
 
-    const masterAuthority = new PublicKey(data.slice(4, 36));
-    const mintAddr = new PublicKey(data.slice(36, 68));
-    const preset = data[68];
-    const paused = data[69] === 1;
+    if (data.length < 8) return null;
+
+    const masterAuthority = new PublicKey(data.slice(8, 40));
+    const mintAddr = new PublicKey(data.slice(40, 72));
+    const preset = data[72];
+    const paused = data[73] === 1;
 
     const mintInfo = await connection.getParsedAccountInfo(mint);
     let decimals = 9;
@@ -446,16 +447,26 @@ export class ComplianceClient {
     const reasonLengthBuffer = Buffer.alloc(4);
     reasonLengthBuffer.writeUInt32LE(reasonBytes.length, 0);
 
-    const discriminator = Buffer.from([0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4]);
+    const discriminator = Buffer.from([
+      0xfe, 0xb8, 0x83, 0xc8, 0x91, 0x32, 0x2b, 0xf4,
+    ]);
 
     const ix = new TransactionInstruction({
       programId: new PublicKey(PROGRAM_ID),
       keys: [
         { pubkey: blacklist, isWritable: true, isSigner: false },
         { pubkey: config, isWritable: true, isSigner: false },
-        { pubkey: this.stablecoin.authorityAddress, isWritable: true, isSigner: true },
+        {
+          pubkey: this.stablecoin.authorityAddress,
+          isWritable: true,
+          isSigner: true,
+        },
         { pubkey: address, isWritable: false, isSigner: false },
-        { pubkey: new PublicKey(SYSTEM_PROGRAM_ID), isWritable: false, isSigner: false },
+        {
+          pubkey: new PublicKey(SYSTEM_PROGRAM_ID),
+          isWritable: false,
+          isSigner: false,
+        },
       ],
       data: Buffer.concat([discriminator, reasonLengthBuffer, reasonBytes]),
     });
