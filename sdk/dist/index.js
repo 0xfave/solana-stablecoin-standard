@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Presets = exports.ComplianceClient = exports.SolanaStablecoin = exports.PRESET = void 0;
 exports.getInstructionDiscriminator = getInstructionDiscriminator;
+exports.parseConfig = parseConfig;
 const web3_js_1 = require("@solana/web3.js");
 const spl_token_1 = require("@solana/spl-token");
 const crypto_1 = require("crypto");
@@ -17,8 +18,13 @@ const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
 const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
 class SolanaStablecoin {
-    constructor(connection, mint, config, authority, preset, decimals = 9) {
+    constructor(connection, mint, config, authority, preset, decimals = 9, minters = [], freezer = null, pauser = null, blacklister = null, paused = false) {
         this._decimals = 9;
+        this._minters = [];
+        this._freezer = null;
+        this._pauser = null;
+        this._blacklister = null;
+        this._paused = false;
         this._connection = connection;
         this._mint = mint;
         this._config = config;
@@ -26,6 +32,29 @@ class SolanaStablecoin {
         this._preset = preset;
         this._programId = new web3_js_1.PublicKey(PROGRAM_ID);
         this._decimals = decimals;
+        this._minters = minters;
+        this._freezer = freezer;
+        this._pauser = pauser;
+        this._blacklister = blacklister;
+        this._paused = paused;
+    }
+    get minters() {
+        return this._minters;
+    }
+    get freezer() {
+        return this._freezer;
+    }
+    get pauser() {
+        return this._pauser;
+    }
+    get blacklister() {
+        return this._blacklister;
+    }
+    get paused() {
+        return this._paused;
+    }
+    get preset() {
+        return this._preset;
     }
     static async create(connection, params) {
         const { preset, authority, decimals, supplyCap } = params;
@@ -94,22 +123,32 @@ class SolanaStablecoin {
     static async fetch(connection, mint) {
         const [config] = await web3_js_1.PublicKey.findProgramAddress([Buffer.from("stablecoin"), mint.toBuffer()], new web3_js_1.PublicKey(PROGRAM_ID));
         const configInfo = await connection.getAccountInfo(config);
-        if (!configInfo?.data)
+        if (!configInfo?.data) {
+            console.log("fetch() — no config account found for mint:", mint.toString());
             return null;
+        }
         const data = configInfo.data;
+        console.log("fetch() — discriminator found:", data.readUInt32LE(0));
+        console.log("fetch() — expected:", 1393578635);
+        console.log("fetch() — data length:", data.length);
+        if (data.readUInt32LE(0) !== 1393578635) {
+            console.log("fetch() — discriminator mismatch, returning null");
+            return null;
+        }
         if (data.length < 8)
             return null;
-        const masterAuthority = new web3_js_1.PublicKey(data.slice(8, 40));
-        const mintAddr = new web3_js_1.PublicKey(data.slice(40, 72));
-        const preset = data[72];
-        const paused = data[73] === 1;
-        const mintInfo = await connection.getParsedAccountInfo(mint);
-        let decimals = 9;
-        if (mintInfo.value?.data) {
-            const mintData = mintInfo.value.data;
-            decimals = mintData.parsed?.info?.decimals ?? 9;
+        // Validate Anchor discriminator
+        const EXPECTED_DISCRIMINATOR = 1393578635;
+        if (data.readUInt32LE(0) !== EXPECTED_DISCRIMINATOR)
+            return null;
+        try {
+            const parsed = parseConfig(data);
+            return new SolanaStablecoin(connection, mint, config, parsed.masterAuthority, parsed.preset, parsed.decimals, parsed.minters, parsed.freezer, parsed.pauser, parsed.blacklister, parsed.paused);
         }
-        return new SolanaStablecoin(connection, mint, config, masterAuthority, preset, decimals);
+        catch (e) {
+            console.error("Failed to parse config:", e);
+            return null;
+        }
     }
     get mintAddress() {
         return this._mint;
@@ -359,4 +398,73 @@ class ComplianceClient {
     }
 }
 exports.ComplianceClient = ComplianceClient;
+function parseConfig(data) {
+    // 0-7:   discriminator
+    // 8-39:  master_authority
+    // 40-71: mint
+    // 72:    preset
+    // 73:    paused
+    const masterAuthority = new web3_js_1.PublicKey(data.slice(8, 40));
+    const mint = new web3_js_1.PublicKey(data.slice(40, 72));
+    const preset = data[72];
+    const paused = data[73] === 1;
+    let offset = 74;
+    // supply_cap: Option<u64>
+    const hasSupplyCap = data[offset] === 1;
+    offset += 1;
+    let supplyCap;
+    if (hasSupplyCap) {
+        supplyCap = data.readBigUInt64LE(offset);
+        offset += 8;
+    }
+    // transfer_hook_program: Option<Pubkey>
+    const hasTransferHook = data[offset] === 1;
+    offset += 1;
+    if (hasTransferHook)
+        offset += 32;
+    // decimals: u8
+    const decimals = data[offset];
+    offset += 1;
+    // bump: u8
+    const bump = data[offset];
+    offset += 1;
+    // pending_master_authority: Option<Pubkey>
+    const hasPending = data[offset] === 1;
+    offset += 1;
+    let pendingMasterAuthority;
+    if (hasPending) {
+        pendingMasterAuthority = new web3_js_1.PublicKey(data.slice(offset, offset + 32));
+        offset += 32;
+    }
+    // minters: Vec<Pubkey>
+    const mintersLen = data.readUInt32LE(offset);
+    offset += 4;
+    const minters = [];
+    for (let m = 0; m < mintersLen && m < 10; m++) {
+        minters.push(new web3_js_1.PublicKey(data.slice(offset, offset + 32)));
+        offset += 32;
+    }
+    // freezer: Pubkey
+    const freezer = new web3_js_1.PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+    // pauser: Pubkey
+    const pauser = new web3_js_1.PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+    // blacklister: Pubkey
+    const blacklister = new web3_js_1.PublicKey(data.slice(offset, offset + 32));
+    return {
+        masterAuthority,
+        mint,
+        preset,
+        paused,
+        supplyCap,
+        decimals,
+        bump,
+        pendingMasterAuthority,
+        minters,
+        freezer,
+        pauser,
+        blacklister,
+    };
+}
 exports.Presets = exports.PRESET;

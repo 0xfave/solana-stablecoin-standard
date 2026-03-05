@@ -185,7 +185,7 @@ export default function TokenTable() {
               onClick={() => openModal()}
               className="bg-[#25d1f4] text-black px-4 py-2 text-xs font-bold uppercase hover:bg-white transition-colors"
             >
-              Create New Token sss-1/sss-2
+              Create New Token
             </button>
           </div>
         </div>

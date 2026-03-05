@@ -70,6 +70,21 @@ export interface SeizeParams {
   seizer: Signer;
 }
 
+export interface StablecoinConfig {
+  masterAuthority: PublicKey;
+  mint: PublicKey;
+  preset: Preset;
+  paused: boolean;
+  supplyCap?: bigint;
+  decimals: number;
+  bump: number;
+  pendingMasterAuthority?: PublicKey;
+  minters: PublicKey[];
+  freezer: PublicKey;
+  pauser: PublicKey;
+  blacklister: PublicKey;
+}
+
 const PROGRAM_ID = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6";
 const TOKEN_2022_PROGRAM_ID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 const SYSTEM_PROGRAM_ID = "11111111111111111111111111111111";
@@ -82,6 +97,11 @@ export class SolanaStablecoin {
   private _preset: Preset;
   private _programId: PublicKey;
   private _decimals: number = 9;
+  private _minters: PublicKey[] = [];
+  private _freezer: PublicKey | null = null;
+  private _pauser: PublicKey | null = null;
+  private _blacklister: PublicKey | null = null;
+  private _paused: boolean = false;
 
   private constructor(
     connection: Connection,
@@ -89,7 +109,12 @@ export class SolanaStablecoin {
     config: PublicKey,
     authority: PublicKey,
     preset: Preset,
-    decimals: number = 9
+    decimals: number = 9,
+    minters: PublicKey[] = [],
+    freezer: PublicKey | null = null,
+    pauser: PublicKey | null = null,
+    blacklister: PublicKey | null = null,
+    paused: boolean = false
   ) {
     this._connection = connection;
     this._mint = mint;
@@ -98,6 +123,31 @@ export class SolanaStablecoin {
     this._preset = preset;
     this._programId = new PublicKey(PROGRAM_ID);
     this._decimals = decimals;
+    this._minters = minters;
+    this._freezer = freezer;
+    this._pauser = pauser;
+    this._blacklister = blacklister;
+    this._paused = paused;
+  }
+
+  get minters(): PublicKey[] {
+    return this._minters;
+  }
+  get freezer(): PublicKey | null {
+    return this._freezer;
+  }
+  get pauser(): PublicKey | null {
+    return this._pauser;
+  }
+  get blacklister(): PublicKey | null {
+    return this._blacklister;
+  }
+  get paused(): boolean {
+    return this._paused;
+  }
+
+  get preset(): Preset {
+    return this._preset;
   }
 
   static async create(
@@ -213,32 +263,40 @@ export class SolanaStablecoin {
     const configInfo = await connection.getAccountInfo(config);
     if (!configInfo?.data) return null;
 
-    const data = configInfo.data;
-
+    const data = configInfo.data as Buffer;
     if (data.length < 8) return null;
 
-    const masterAuthority = new PublicKey(data.slice(8, 40));
-    const mintAddr = new PublicKey(data.slice(40, 72));
-    const preset = data[72];
-    const paused = data[73] === 1;
+    // ✅ Compute correct 8-byte Anchor discriminator
+    const expectedDiscriminator = createHash("sha256")
+      .update("account:StablecoinConfig")
+      .digest()
+      .slice(0, 8);
 
-    const mintInfo = await connection.getParsedAccountInfo(mint);
-    let decimals = 9;
-    if (mintInfo.value?.data) {
-      const mintData = mintInfo.value.data as {
-        parsed: { info: { decimals: number } };
-      };
-      decimals = mintData.parsed?.info?.decimals ?? 9;
+    const actualDiscriminator = data.slice(0, 8);
+
+    if (!actualDiscriminator.equals(expectedDiscriminator)) {
+      return null;
     }
 
-    return new SolanaStablecoin(
-      connection,
-      mint,
-      config,
-      masterAuthority,
-      preset as Preset,
-      decimals
-    );
+    try {
+      const parsed = parseConfig(data);
+      return new SolanaStablecoin(
+        connection,
+        mint,
+        config,
+        parsed.masterAuthority,
+        parsed.preset,
+        parsed.decimals,
+        parsed.minters,
+        parsed.freezer,
+        parsed.pauser,
+        parsed.blacklister,
+        parsed.paused
+      );
+    } catch (e) {
+      console.error("Failed to parse config:", e);
+      return null;
+    }
   }
 
   get mintAddress(): PublicKey {
@@ -557,6 +615,87 @@ export class ComplianceClient {
     const signed = await authority.signTransaction(tx);
     return new Connection("").sendRawTransaction(signed.serialize());
   }
+}
+
+export function parseConfig(data: Buffer): StablecoinConfig {
+  // 0-7:   discriminator
+  // 8-39:  master_authority
+  // 40-71: mint
+  // 72:    preset
+  // 73:    paused
+
+  const masterAuthority = new PublicKey(data.slice(8, 40));
+  const mint = new PublicKey(data.slice(40, 72));
+  const preset = data[72] as Preset;
+  const paused = data[73] === 1;
+
+  let offset = 74;
+
+  // supply_cap: Option<u64>
+  const hasSupplyCap = data[offset] === 1;
+  offset += 1;
+  let supplyCap: bigint | undefined;
+  if (hasSupplyCap) {
+    supplyCap = data.readBigUInt64LE(offset);
+    offset += 8;
+  }
+
+  // transfer_hook_program: Option<Pubkey>
+  const hasTransferHook = data[offset] === 1;
+  offset += 1;
+  if (hasTransferHook) offset += 32;
+
+  // decimals: u8
+  const decimals = data[offset];
+  offset += 1;
+
+  // bump: u8
+  const bump = data[offset];
+  offset += 1;
+
+  // pending_master_authority: Option<Pubkey>
+  const hasPending = data[offset] === 1;
+  offset += 1;
+  let pendingMasterAuthority: PublicKey | undefined;
+  if (hasPending) {
+    pendingMasterAuthority = new PublicKey(data.slice(offset, offset + 32));
+    offset += 32;
+  }
+
+  // minters: Vec<Pubkey>
+  const mintersLen = data.readUInt32LE(offset);
+  offset += 4;
+  const minters: PublicKey[] = [];
+  for (let m = 0; m < mintersLen && m < 10; m++) {
+    minters.push(new PublicKey(data.slice(offset, offset + 32)));
+    offset += 32;
+  }
+
+  // freezer: Pubkey
+  const freezer = new PublicKey(data.slice(offset, offset + 32));
+  offset += 32;
+
+  // pauser: Pubkey
+  const pauser = new PublicKey(data.slice(offset, offset + 32));
+  offset += 32;
+
+  // blacklister: Pubkey
+  const blacklister = new PublicKey(data.slice(offset, offset + 32));
+
+  return {
+    masterAuthority,
+    mint,
+    preset,
+    paused,
+    supplyCap,
+    decimals,
+    bump,
+    pendingMasterAuthority,
+    minters,
+    freezer,
+    pauser,
+    blacklister,
+  };
 }
 
 export const Presets = PRESET;

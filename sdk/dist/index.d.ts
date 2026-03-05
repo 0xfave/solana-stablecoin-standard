@@ -43,6 +43,20 @@ export interface SeizeParams {
     amount: number;
     seizer: Signer;
 }
+export interface StablecoinConfig {
+    masterAuthority: PublicKey;
+    mint: PublicKey;
+    preset: Preset;
+    paused: boolean;
+    supplyCap?: bigint;
+    decimals: number;
+    bump: number;
+    pendingMasterAuthority?: PublicKey;
+    minters: PublicKey[];
+    freezer: PublicKey;
+    pauser: PublicKey;
+    blacklister: PublicKey;
+}
 export declare class SolanaStablecoin {
     private _connection;
     private _mint;
@@ -51,7 +65,18 @@ export declare class SolanaStablecoin {
     private _preset;
     private _programId;
     private _decimals;
+    private _minters;
+    private _freezer;
+    private _pauser;
+    private _blacklister;
+    private _paused;
     private constructor();
+    get minters(): PublicKey[];
+    get freezer(): PublicKey | null;
+    get pauser(): PublicKey | null;
+    get blacklister(): PublicKey | null;
+    get paused(): boolean;
+    get preset(): Preset;
     static create(connection: Connection, params: CreateStablecoinParams): Promise<SolanaStablecoin>;
     static fetch(connection: Connection, mint: PublicKey): Promise<SolanaStablecoin | null>;
     get mintAddress(): PublicKey;
@@ -74,6 +99,7 @@ export declare class ComplianceClient {
     seize(params: SeizeParams): Promise<string>;
     freeze(account: PublicKey, authority: Signer): Promise<string>;
 }
+export declare function parseConfig(data: Buffer): StablecoinConfig;
 export declare const Presets: {
     readonly SSS_1: 0;
     readonly SSS_2: 1;
