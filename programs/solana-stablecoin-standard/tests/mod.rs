@@ -190,8 +190,7 @@ mod tests {
         permanent_delegate: Option<Pubkey>,
     ) -> Result<(), String> {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (compliance_pda, _) =
-            Pubkey::find_program_address(&[b"compliance", config_pda.as_ref()], &PROGRAM_ID);
+        let (compliance_pda, _) = Pubkey::find_program_address(&[b"compliance", config_pda.as_ref()], &PROGRAM_ID);
 
         #[derive(anchor_lang::AnchorSerialize)]
         struct Args {
@@ -229,16 +228,14 @@ mod tests {
     // Helper: derive the compliance PDA for a given mint
     fn get_compliance_pda(mint: &Pubkey) -> Pubkey {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (compliance_pda, _) =
-            Pubkey::find_program_address(&[b"compliance", config_pda.as_ref()], &PROGRAM_ID);
+        let (compliance_pda, _) = Pubkey::find_program_address(&[b"compliance", config_pda.as_ref()], &PROGRAM_ID);
         compliance_pda
     }
 
     // Helper: derive the privacy PDA for a given mint
     fn get_privacy_pda(mint: &Pubkey) -> Pubkey {
         let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
-        let (privacy_pda, _) =
-            Pubkey::find_program_address(&[b"privacy", config_pda.as_ref()], &PROGRAM_ID);
+        let (privacy_pda, _) = Pubkey::find_program_address(&[b"privacy", config_pda.as_ref()], &PROGRAM_ID);
         privacy_pda
     }
 
@@ -563,9 +560,9 @@ mod tests {
             AccountMeta::new(blacklist_entry, false),
             AccountMeta::new_readonly(compliance_pda, false),
             AccountMeta::new_readonly(config_pda, false),
-            AccountMeta::new(authority.pubkey(), true),  // master_authority
+            AccountMeta::new(authority.pubkey(), true), // master_authority
             AccountMeta::new_readonly(*target, false),
-            AccountMeta::new(authority.pubkey(), true),  // authority (receives rent)
+            AccountMeta::new(authority.pubkey(), true), // authority (receives rent)
         ];
 
         let blockhash = svm.latest_blockhash();
@@ -901,10 +898,8 @@ mod tests {
 
         let compliance_account = svm.get_account(&compliance_pda).unwrap();
         let compliance_data =
-            solana_stablecoin_standard::state::ComplianceModule::try_deserialize(
-                &mut compliance_account.data.as_ref()
-            )
-            .unwrap();
+            solana_stablecoin_standard::state::ComplianceModule::try_deserialize(&mut compliance_account.data.as_ref())
+                .unwrap();
         assert_eq!(compliance_data.blacklister, mint_authority.pubkey());
     }
 
@@ -1371,10 +1366,8 @@ mod tests {
         let compliance_pda = get_compliance_pda(&mint.pubkey());
         let compliance_account = svm.get_account(&compliance_pda).unwrap();
         let compliance_data =
-            solana_stablecoin_standard::state::ComplianceModule::try_deserialize(
-                &mut compliance_account.data.as_ref()
-            )
-            .unwrap();
+            solana_stablecoin_standard::state::ComplianceModule::try_deserialize(&mut compliance_account.data.as_ref())
+                .unwrap();
         assert_eq!(compliance_data.blacklister, new_blacklister.pubkey());
     }
 
@@ -1593,12 +1586,17 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string())
-            .unwrap();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
 
         let result = seize(
-            svm, payer, mint_authority, &mint.pubkey(),
-            &victim_token_account, &destination_token_account, &victim.pubkey(), 500,
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
         );
         assert!(result.is_ok(), "seize should succeed when called by minter (permanent delegate)");
     }
@@ -1627,12 +1625,17 @@ mod tests {
         let destination_token_account = create_token_account_for_owner(svm, payer, &destination, &mint.pubkey());
 
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string())
-            .unwrap();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &victim.pubkey(), "Test reason".to_string()).unwrap();
 
         let result = seize(
-            svm, payer, &non_seizer, &mint.pubkey(),
-            &victim_token_account, &destination_token_account, &victim.pubkey(), 500,
+            svm,
+            payer,
+            &non_seizer,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
         );
         assert!(result.is_err(), "seize should fail when called by non-minter");
     }
@@ -1661,8 +1664,14 @@ mod tests {
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         let result = seize(
-            svm, payer, mint_authority, &mint.pubkey(),
-            &victim_token_account, &destination_token_account, &victim.pubkey(), 500,
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
         );
         assert!(result.is_err(), "seize should fail if source not blacklisted");
     }
@@ -1689,8 +1698,14 @@ mod tests {
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &victim_token_account, 1000).unwrap();
 
         let result = seize(
-            svm, payer, mint_authority, &mint.pubkey(),
-            &victim_token_account, &destination_token_account, &victim.pubkey(), 500,
+            svm,
+            payer,
+            mint_authority,
+            &mint.pubkey(),
+            &victim_token_account,
+            &destination_token_account,
+            &victim.pubkey(),
+            500,
         );
         assert!(result.is_err(), "seize should fail when no compliance module is attached (SSS-1)");
     }
@@ -1728,8 +1743,7 @@ mod tests {
             .unwrap();
 
         let target = Keypair::new();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string())
-            .unwrap();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
 
         let result =
             blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string());
@@ -1758,8 +1772,15 @@ mod tests {
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_ok(), "transfer should succeed with no modules attached (SSS-1)");
     }
@@ -1789,8 +1810,15 @@ mod tests {
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_ok(), "transfer should succeed when compliance module attached but wallets are clean");
     }
@@ -1819,8 +1847,15 @@ mod tests {
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_ok(), "transfer should succeed when sender/receiver not blacklisted");
     }
@@ -1847,12 +1882,18 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user1.pubkey(), "Test reason".to_string())
-            .unwrap();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user1.pubkey(), "Test reason".to_string()).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_err(), "transfer should fail when sender is blacklisted");
     }
@@ -1879,12 +1920,18 @@ mod tests {
         let token_account2 = create_token_account_for_owner(svm, payer, &user2, &mint.pubkey());
 
         program_mint(svm, payer, mint_authority, &mint.pubkey(), &token_account1, 1000).unwrap();
-        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user2.pubkey(), "Test reason".to_string())
-            .unwrap();
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &user2.pubkey(), "Test reason".to_string()).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_err(), "transfer should fail when receiver is blacklisted");
     }
@@ -1912,8 +1959,15 @@ mod tests {
         update_paused(svm, payer, mint_authority, &mint.pubkey(), true).unwrap();
 
         let result = transfer(
-            svm, payer, &user1, &mint.pubkey(),
-            &token_account1, &token_account2, &user1.pubkey(), &user2.pubkey(), 500,
+            svm,
+            payer,
+            &user1,
+            &mint.pubkey(),
+            &token_account1,
+            &token_account2,
+            &user1.pubkey(),
+            &user2.pubkey(),
+            500,
         );
         assert!(result.is_err(), "transfer should fail when paused");
     }
@@ -1950,5 +2004,65 @@ mod tests {
         let new_hook = Keypair::new();
         let result = update_transfer_hook(svm, payer, mint_authority, &mint.pubkey(), Some(new_hook.pubkey()));
         assert!(result.is_err(), "update_transfer_hook should fail when no compliance module is attached");
+    }
+
+    #[test]
+    fn test_blacklist_remove_succeeds() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+        attach_compliance_module(svm, payer, mint_authority, &mint.pubkey(), mint_authority.pubkey(), None, None)
+            .unwrap();
+
+        let target = Keypair::new();
+        svm.airdrop(&target.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey(), "Test reason".to_string()).unwrap();
+
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_ok(), "blacklist_remove should succeed when caller is blacklister");
+    }
+
+    #[test]
+    fn test_blacklist_remove_fails_if_not_blacklisted() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+        attach_compliance_module(svm, payer, mint_authority, &mint.pubkey(), mint_authority.pubkey(), None, None)
+            .unwrap();
+
+        let target = Keypair::new();
+        svm.airdrop(&target.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_err(), "blacklist_remove should fail if not blacklisted");
+    }
+
+    #[test]
+    fn test_blacklist_remove_fails_sss1() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let target = Keypair::new();
+        svm.airdrop(&target.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
+        assert!(result.is_err(), "blacklist_remove should fail in SSS-1 mode");
     }
 }
