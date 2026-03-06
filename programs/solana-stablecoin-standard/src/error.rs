@@ -1,55 +1,54 @@
 use anchor_lang::prelude::*;
 
+
 #[error_code]
-pub enum StablecoinError {
-    #[msg("Unauthorized - caller is not the master authority")]
+pub enum SssError {
+    #[msg("Signer is not the master authority")]
     Unauthorized,
-    #[msg("Unauthorized - caller is not the minter")]
-    UnauthorizedMinter,
-    #[msg("Unauthorized - caller is not the freezer")]
-    UnauthorizedFreezer,
-    #[msg("Unauthorized - caller is not the pauser")]
+    #[msg("Signer is not the authorized pauser")]
     UnauthorizedPauser,
-    #[msg("Unauthorized - caller is not the blacklister")]
-    UnauthorizedBlacklister,
-    #[msg("Unauthorized - caller is not the seizer")]
+    #[msg("Signer is not the authorized freezer")]
+    UnauthorizedFreezer,
+    #[msg("Signer is not the authorized minter")]
+    UnauthorizedMinter,
+    #[msg("Signer is not the authorized seizer")]
     UnauthorizedSeizer,
-    #[msg("Account is blacklisted")]
-    Blacklisted,
-    #[msg("Account is not blacklisted")]
-    NotBlacklisted,
-    #[msg("Account is already blacklisted")]
-    AlreadyBlacklisted,
-    #[msg("Minting is paused")]
+    #[msg("Signer is not the compliance module blacklister")]
+    UnauthorizedBlacklister,
+    #[msg("Signer is not the privacy module allowlist authority")]
+    UnauthorizedAllowlistAuthority,
+    #[msg("Module config field does not match the provided config account")]
+    ModuleConfigMismatch,
+    #[msg("Mint or burn is paused")]
     MintPaused,
-    #[msg("Overflow in arithmetic")]
-    Overflow,
-    #[msg("Not Compliant Token (SSS-2 required)")]
-    NotCompliantMode,
+    #[msg("Burn is paused")]
+    BurnPaused,
     #[msg("Transfers are paused")]
     TransfersPaused,
+    #[msg("Supply cap would be exceeded")]
+    SupplyCapExceeded,
+    #[msg("Arithmetic overflow")]
+    Overflow,
     #[msg("Sender is blacklisted")]
     SenderBlacklisted,
     #[msg("Receiver is blacklisted")]
     ReceiverBlacklisted,
-    #[msg("Invalid account")]
-    InvalidAccount,
-    #[msg("Cannot blacklist zero address")]
-    BlacklistZeroAddress,
-    #[msg("Invalid blacklist account")]
-    InvalidBlacklistAccount,
-    #[msg("Transfer hook must be set in compliant mode")]
-    TransferHookRequired,
-    #[msg("Address is already a minter")]
-    AlreadyMinter,
-    #[msg("Minter not found")]
-    MinterNotFound,
-    #[msg("Too many minters (max 10)")]
-    TooManyMinters,
-    #[msg("Source and destination accounts cannot be the same")]
+    #[msg("Sender is not on the allowlist")]
+    SenderNotAllowlisted,
+    #[msg("Receiver is not on the allowlist")]
+    ReceiverNotAllowlisted,
+    #[msg("Source and destination accounts must be different")]
     SameAccount,
-    #[msg("Burning is paused")]
-    BurnPaused,
-    #[msg("No pending master authority transfer for this account")]
+    #[msg("Address must not be the default (zero) pubkey")]
+    InvalidAddress,
+    #[msg("This pubkey is already a minter")]
+    AlreadyMinter,
+    #[msg("Minter not found in minters list")]
+    MinterNotFound,
+    #[msg("Maximum of 10 minters allowed")]
+    TooManyMinters,
+    #[msg("No pending authority transfer")]
     NoPendingTransfer,
+    #[msg("Reason string exceeds 128 characters")]
+    ReasonTooLong,
 }

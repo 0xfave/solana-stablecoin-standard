@@ -6,11 +6,11 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-solana_stablecoin_standard = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+solana_stablecoin_standard = "C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw"
 sss_compliance_hook = "2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88"
 
 [programs.devnet]
-solana_stablecoin_standard = "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+solana_stablecoin_standard = "C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw"
 sss_compliance_hook = "2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88"
 
 [registry]
