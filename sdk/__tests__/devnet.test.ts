@@ -370,7 +370,7 @@ describe("Live devnet — SSS-2 compliance module", () => {
 
     ;[compliancePda] = await PublicKey.findProgramAddress(
       [Buffer.from("compliance"), stablecoin.configAddress.toBuffer()],
-      new PublicKey("CgvFp3RNTC9SCpbHqP3KjzRLMd1SckdoWDynqfcQDvA3")
+      new PublicKey("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw")
     );
     await waitForAccount(connection, compliancePda);
     const isAttached = await stablecoin.compliance.isAttached();
@@ -408,7 +408,7 @@ describe("Live devnet — SSS-2 compliance module", () => {
         stablecoin.configAddress.toBuffer(),
         victim.publicKey.toBuffer(),
       ],
-      new PublicKey("CgvFp3RNTC9SCpbHqP3KjzRLMd1SckdoWDynqfcQDvA3")
+      new PublicKey("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw")
     );
     await waitForAccount(connection, blacklistPda);
     const info = await connection.getAccountInfo(blacklistPda, "confirmed");
@@ -480,7 +480,7 @@ describe("Live devnet — Privacy module", () => {
   let allowlistA: PublicKey;
   let allowlistB: PublicKey;
 
-  const PROG = new PublicKey("CgvFp3RNTC9SCpbHqP3KjzRLMd1SckdoWDynqfcQDvA3");
+  const PROG = new PublicKey("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw");
 
   beforeAll(async () => {
     await airdropIfNeeded(connection, payer.publicKey);
@@ -606,7 +606,7 @@ describe("Live devnet — Module lifecycle (upgrade + downgrade)", () => {
 
   let stablecoin: SolanaStablecoin;
 
-  const PROG = new PublicKey("CgvFp3RNTC9SCpbHqP3KjzRLMd1SckdoWDynqfcQDvA3");
+  const PROG = new PublicKey("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw");
 
   beforeAll(async () => {
     await airdropIfNeeded(connection, payer.publicKey);
@@ -773,7 +773,7 @@ describe("Live devnet — Fetch and inspect existing on-chain state", () => {
   it("parseConfig returns correct field values", async () => {
     const [configPda] = await PublicKey.findProgramAddress(
       [Buffer.from("stablecoin"), mintAddress.toBuffer()],
-      new PublicKey("CgvFp3RNTC9SCpbHqP3KjzRLMd1SckdoWDynqfcQDvA3")
+      new PublicKey("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw")
     );
     const info = await connection.getAccountInfo(configPda, "confirmed");
     expect(info).not.toBeNull();
