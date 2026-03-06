@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
 
-
 #[error_code]
 pub enum SssError {
     #[msg("Signer is not the master authority")]

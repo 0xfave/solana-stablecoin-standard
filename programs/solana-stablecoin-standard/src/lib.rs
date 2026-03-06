@@ -1,13 +1,11 @@
 use anchor_lang::{prelude::*, solana_program::program::invoke};
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-pub mod state;
-mod event;
 mod error;
+mod event;
+pub mod state;
 
-use crate::event::*;
-use crate::state::*;
-use crate::error::*;
+use crate::{error::*, event::*, state::*};
 
 declare_id!("C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw");
 
