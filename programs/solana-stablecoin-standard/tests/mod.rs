@@ -617,6 +617,63 @@ mod tests {
         }
     }
 
+    fn propose_master_authority(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+        new_authority: Pubkey,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("propose_master_authority");
+        let data = serialize_with_discriminator(&discriminator, &new_authority.to_bytes());
+
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(authority.pubkey(), true)];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn accept_master_authority(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        new_authority: &Keypair,
+        mint: &Pubkey,
+    ) -> Result<(), String> {
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("accept_master_authority");
+        let data = serialize_with_discriminator(&discriminator, &[]);
+
+        let accounts = vec![AccountMeta::new(config_pda, false), AccountMeta::new(new_authority.pubkey(), true)];
+
+        let blockhash = svm.latest_blockhash();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, new_authority],
+            blockhash,
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
     fn add_minter(
         svm: &mut LiteSVM,
         payer: &Keypair,
@@ -2064,5 +2121,100 @@ mod tests {
 
         let result = blacklist_remove(svm, payer, mint_authority, &mint.pubkey(), &target.pubkey());
         assert!(result.is_err(), "blacklist_remove should fail in SSS-1 mode");
+    }
+
+    #[test]
+    fn test_propose_master_authority_succeeds() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let new_authority = Keypair::new();
+        let result = propose_master_authority(svm, payer, mint_authority, &mint.pubkey(), new_authority.pubkey());
+        assert!(result.is_ok(), "propose_master_authority should succeed when called by master_authority");
+
+        let config_data = get_config(svm, &mint.pubkey());
+        assert_eq!(config_data.pending_master_authority, Some(new_authority.pubkey()));
+    }
+
+    #[test]
+    fn test_propose_master_authority_fails_by_non_owner() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let non_owner = Keypair::new();
+        svm.airdrop(&non_owner.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let new_authority = Keypair::new();
+        let result = propose_master_authority(svm, payer, &non_owner, &mint.pubkey(), new_authority.pubkey());
+        assert!(result.is_err(), "propose_master_authority should fail when called by non-owner");
+    }
+
+    #[test]
+    fn test_accept_master_authority_succeeds() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let new_authority = Keypair::new();
+        propose_master_authority(svm, payer, mint_authority, &mint.pubkey(), new_authority.pubkey()).unwrap();
+
+        let result = accept_master_authority(svm, payer, &new_authority, &mint.pubkey());
+        assert!(result.is_ok(), "accept_master_authority should succeed with correct new authority");
+
+        let config_data = get_config(svm, &mint.pubkey());
+        assert_eq!(config_data.master_authority, new_authority.pubkey());
+        assert_eq!(config_data.pending_master_authority, None);
+    }
+
+    #[test]
+    fn test_accept_master_authority_fails_wrong_signer() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let new_authority = Keypair::new();
+        let wrong_authority = Keypair::new();
+        propose_master_authority(svm, payer, mint_authority, &mint.pubkey(), new_authority.pubkey()).unwrap();
+
+        let result = accept_master_authority(svm, payer, &wrong_authority, &mint.pubkey());
+        assert!(result.is_err(), "accept_master_authority should fail when signed by wrong authority");
+    }
+
+    #[test]
+    fn test_accept_master_authority_fails_no_pending() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint(svm, payer, mint, &mint_authority.pubkey(), 6);
+        let _config = initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+
+        let new_authority = Keypair::new();
+        let result = accept_master_authority(svm, payer, &new_authority, &mint.pubkey());
+        assert!(result.is_err(), "accept_master_authority should fail when there is no pending authority");
     }
 }
