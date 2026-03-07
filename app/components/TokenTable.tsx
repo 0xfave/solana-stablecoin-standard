@@ -50,10 +50,10 @@ export default function TokenTable() {
   const formatSupply = (supply: string, decimals: number) => {
     try {
       const num = Number(supply) / Math.pow(10, decimals);
-      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1)}B`;
-      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-      if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
-      return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
+      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(3)}B`;
+      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(3)}M`;
+      if (num >= 1_000) return `${(num / 1_000).toFixed(3)}K`;
+      return num.toLocaleString(undefined, { maximumFractionDigits: 3 });
     } catch {
       return supply;
     }

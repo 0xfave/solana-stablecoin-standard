@@ -26,9 +26,13 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
   const [amount, setAmount] = useState("");
   const [seizing, setSeizing] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [sourceBalance, setSourceBalance] = useState<number | null>(null);
+  const [fetchingBalance, setFetchingBalance] = useState(false);
 
   const tokenLabel = token
-    ? token.name || token.symbol || `${token.mint.slice(0, 8)}...${token.mint.slice(-4)}`
+    ? token.name ||
+      token.symbol ||
+      `${token.mint.slice(0, 8)}...${token.mint.slice(-4)}`
     : "Select a token";
 
   useEffect(() => {
@@ -43,13 +47,63 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
     }
   }, [token, fetchSeizeHistory]);
 
+  useEffect(() => {
+    if (!token || !fromAddress || fromAddress.length < 32) {
+      setSourceBalance(null);
+      return;
+    }
+    setFetchingBalance(true);
+    // Fetch the ATA balance for the from address
+    (async () => {
+      try {
+        const { Connection, PublicKey } = await import("@solana/web3.js");
+        const { getAssociatedTokenAddress, getAccount, TOKEN_2022_PROGRAM_ID } =
+          await import("@solana/spl-token");
+        const conn = new Connection(
+          process.env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com",
+          "confirmed"
+        );
+        const mint = new PublicKey(token.mint);
+        const owner = new PublicKey(fromAddress);
+        const ata = await getAssociatedTokenAddress(
+          mint,
+          owner,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+        const account = await getAccount(
+          conn,
+          ata,
+          "confirmed",
+          TOKEN_2022_PROGRAM_ID
+        );
+        const balance = Number(account.amount) / Math.pow(10, token.decimals);
+        setSourceBalance(balance);
+      } catch {
+        setSourceBalance(0);
+      } finally {
+        setFetchingBalance(false);
+      }
+    })();
+  }, [fromAddress, token]);
+
   const handleSeize = async () => {
     if (!token || !fromAddress || !toAddress || !amount) return;
+    if (sourceBalance !== null && parseFloat(amount) > sourceBalance) {
+      alert(
+        `Insufficient balance. Source wallet only has ${sourceBalance.toLocaleString()} ${
+          token.symbol || "tokens"
+        }.`
+      );
+      return;
+    }
     setSeizing(true);
     try {
-      const amountInSmallestUnits = Math.floor(parseFloat(amount) * Math.pow(10, token.decimals));
+      const amountInSmallestUnits = Math.floor(
+        parseFloat(amount) * Math.pow(10, token.decimals)
+      );
       await seize(token, fromAddress, toAddress, amountInSmallestUnits);
-        
+
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const updatedHistory = await fetchSeizeHistory(token);
       setHistory(updatedHistory);
@@ -70,7 +124,9 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
     <>
       <section className="osint-card flex flex-col h-[400px]">
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-[#25d1f4]">Seize History</h3>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-[#25d1f4]">
+            Seize History
+          </h3>
           <span className="text-[10px] font-mono opacity-50">{tokenLabel}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-3">
@@ -88,19 +144,30 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
             </div>
           ) : (
             history.map((item, i) => (
-              <div key={i} className="bg-[#141417] p-3 rounded border border-white/5">
+              <div
+                key={i}
+                className="bg-[#141417] p-3 rounded border border-white/5"
+              >
                 <div className="flex justify-between items-start mb-2">
-                  <span className="text-[10px] font-mono text-slate-400">From: {item.from}</span>
-                  <span className="text-xs font-mono text-[#25d1f4]">{item.amount} SSS</span>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    From: {item.from}
+                  </span>
+                  <span className="text-xs font-mono text-[#25d1f4]">
+                    {item.amount} SSS
+                  </span>
                 </div>
-                <div className="text-[10px] opacity-50 font-mono mb-1">To: {item.to.slice(0, 4)}...{item.to.slice(-4)}</div>
-                <div className="text-[10px] opacity-30 font-mono">TXN: {item.txn}</div>
+                <div className="text-[10px] opacity-50 font-mono mb-1">
+                  To: {item.to.slice(0, 4)}...{item.to.slice(-4)}
+                </div>
+                <div className="text-[10px] opacity-30 font-mono">
+                  TXN: {item.txn}
+                </div>
               </div>
             ))
           )}
         </div>
         <div className="p-3 border-t border-white/10">
-          <button 
+          <button
             onClick={() => setShowModal(true)}
             disabled={!token}
             className="w-full py-2 bg-white/5 text-[10px] uppercase font-bold hover:bg-[#25d1f4] hover:text-black transition-colors disabled:opacity-50"
@@ -123,6 +190,16 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
               placeholder="From wallet address (blacklisted)"
               className="w-full px-3 py-2 bg-[#141417] border border-white/10 rounded text-sm mb-3 focus:border-[#25d1f4] outline-none"
             />
+            {sourceBalance !== null && (
+              <p className="text-[10px] font-mono text-slate-400 mb-3">
+                Balance:{" "}
+                {fetchingBalance
+                  ? "..."
+                  : `${sourceBalance.toLocaleString()} ${
+                      token.symbol || "tokens"
+                    }`}
+              </p>
+            )}
             <input
               type="text"
               value={toAddress}
@@ -134,7 +211,7 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              placeholder={`Amount (${token.symbol || 'SSS'})`}
+              placeholder={`Amount (${token.symbol || "SSS"})`}
               className="w-full px-3 py-2 bg-[#141417] border border-white/10 rounded text-sm mb-4 focus:border-[#25d1f4] outline-none"
             />
             <div className="flex gap-3">
@@ -165,8 +242,18 @@ export default function SeizeHistory({ token }: SeizeHistoryProps) {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px] text-center">
             <div className="w-12 h-12 bg-[#25d1f4]/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-[#25d1f4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <svg
+                className="w-6 h-6 text-[#25d1f4]"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-white mb-2">

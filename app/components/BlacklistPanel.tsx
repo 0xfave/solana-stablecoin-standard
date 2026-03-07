@@ -28,9 +28,13 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
   const [addressToRemove, setAddressToRemove] = useState("");
   const [removing, setRemoving] = useState(false);
   const [showRemoveSuccess, setShowRemoveSuccess] = useState(false);
+  const [showReasonModal, setShowReasonModal] = useState(false);
+  const [selectedReason, setSelectedReason] = useState<string>("");
 
   const tokenLabel = token
-    ? token.name || token.symbol || `${token.mint.slice(0, 8)}...${token.mint.slice(-4)}`
+    ? token.name ||
+      token.symbol ||
+      `${token.mint.slice(0, 8)}...${token.mint.slice(-4)}`
     : "Select a token";
 
   useEffect(() => {
@@ -47,9 +51,23 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
 
   const handleAddBlacklist = async () => {
     if (!token || !addressToBlacklist) return;
+
+    // Check if already blacklisted
+    const alreadyBlacklisted = entries.some(
+      (e) => e.addressFull.toLowerCase() === addressToBlacklist.toLowerCase()
+    );
+    if (alreadyBlacklisted) {
+      alert("This address is already blacklisted.");
+      return;
+    }
+
     setAdding(true);
     try {
-      await blacklistAdd(token, addressToBlacklist, reason || "No reason provided");
+      await blacklistAdd(
+        token,
+        addressToBlacklist,
+        reason || "No reason provided"
+      );
       const updatedEntries = await fetchBlacklistEntries(token);
       setEntries(updatedEntries);
       setShowAddModal(false);
@@ -76,7 +94,9 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
       setShowRemoveSuccess(true);
     } catch (err) {
       console.error("Error removing from blacklist:", err);
-      alert(err instanceof Error ? err.message : "Failed to remove from blacklist");
+      alert(
+        err instanceof Error ? err.message : "Failed to remove from blacklist"
+      );
     } finally {
       setRemoving(false);
     }
@@ -86,13 +106,19 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
     <>
       <section className="osint-card flex flex-col h-[400px]">
         <div className="p-4 border-b border-white/10 flex justify-between items-center">
-          <h3 className="text-xs font-bold uppercase tracking-widest text-red-500">Blacklist Registry</h3>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-red-500">
+            Blacklist Registry
+          </h3>
           <span className="text-[10px] font-mono opacity-50">{tokenLabel}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-4">
           {!token ? (
             <div className="text-center text-slate-500 text-sm py-8">
               Select a token to view blacklist
+            </div>
+          ) : !token.complianceAttached ? (
+            <div className="text-center text-slate-500 text-sm py-8">
+              Compliance module not attached — blacklist unavailable
             </div>
           ) : loading ? (
             <div className="text-center text-slate-500 text-sm py-8">
@@ -110,14 +136,17 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
                 </div>
                 <div className="flex gap-2">
                   {entry.reason && (
-                    <button 
-                      onClick={() => alert(`Reason: ${entry.reason}`)}
+                    <button
+                      onClick={() => {
+                        setSelectedReason(entry.reason || "No reason provided");
+                        setShowReasonModal(true);
+                      }}
                       className="flex-1 text-[10px] py-1 bg-[#1f1f23] hover:bg-[#2d2d33] transition-colors uppercase"
                     >
                       Reason
                     </button>
                   )}
-                  <button 
+                  <button
                     onClick={() => {
                       setAddressToRemove(entry.addressFull);
                       setShowRemoveModal(true);
@@ -132,9 +161,9 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
           )}
         </div>
         <div className="p-3 border-t border-white/10">
-          <button 
+          <button
             onClick={() => setShowAddModal(true)}
-            disabled={!token}
+            disabled={!token || !token.complianceAttached}
             className="w-full py-2 bg-white/5 text-[10px] uppercase font-bold hover:bg-red-500 hover:text-white transition-colors disabled:opacity-50"
           >
             address | blacklist
@@ -189,8 +218,18 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px] text-center">
             <div className="w-12 h-12 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <svg
+                className="w-6 h-6 text-red-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-white mb-2">
@@ -248,8 +287,18 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px] text-center">
             <div className="w-12 h-12 bg-[#25d1f4]/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-6 h-6 text-[#25d1f4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              <svg
+                className="w-6 h-6 text-[#25d1f4]"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </div>
             <h3 className="text-sm font-bold uppercase tracking-widest text-white mb-2">
@@ -263,6 +312,25 @@ export default function BlacklistPanel({ token }: BlacklistPanelProps) {
               className="w-full py-2 bg-[#25d1f4] text-black text-xs uppercase font-bold hover:bg-[#25d1f4]/90 transition-colors"
             >
               Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showReasonModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-[#1a1a1f] p-6 rounded-lg border border-white/10 w-[400px]">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-red-500 mb-4">
+              Blacklist Reason
+            </h3>
+            <div className="bg-[#141417] border border-white/10 rounded px-4 py-3 font-mono text-sm text-slate-300 min-h-[60px]">
+              {selectedReason}
+            </div>
+            <button
+              onClick={() => setShowReasonModal(false)}
+              className="mt-4 w-full py-2 bg-white/5 text-xs uppercase font-bold hover:bg-white/10 transition-colors"
+            >
+              Close
             </button>
           </div>
         </div>

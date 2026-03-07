@@ -186,47 +186,43 @@ export function useSolana() {
           const walletPubkey = new PublicKey(publicKey);
 
           const accounts = await connection.getProgramAccounts(PROGRAM_ID, {
-            filters: [
-              { memcmp: { offset: 8, bytes: walletPubkey.toBase58() } },
-            ],
             commitment: "confirmed",
           });
 
           const sssTokens: SssToken[] = [];
 
           for (const { pubkey: configPubkey, account } of accounts) {
-            const masterAuthority = new PublicKey(account.data.slice(8, 40));
-            if (!masterAuthority.equals(walletPubkey)) continue;
-
             try {
               const mintPubkey = new PublicKey(account.data.slice(40, 72));
-              const sss = await SolanaStablecoin.fetch(connection, mintPubkey);
               const mintInfo = await connection.getParsedAccountInfo(
                 mintPubkey
               );
               const rawSupply =
                 (mintInfo.value?.data as any)?.parsed?.info?.supply ?? "0";
 
-              if (sss) {
-                const supply = await sss.getTotalSupply();
-                sssTokens.push({
-                  mint: mintPubkey.toString(),
-                  config: configPubkey.toString(),
-                  authority: walletPubkey.toString(),
-                  supply: rawSupply,
-                  decimals: sss.decimals,
-                  paused: sss.paused,
-                  complianceAttached: await sss.compliance.isAttached(),
-                  privacyAttached: await sss.privacy.isAttached(),
-                  minters: sss.minters.map((m) => m.toString()),
-                  freezer: sss.freezer?.toString() ?? "",
-                });
-              } else {
-                console.warn(
-                  "fetch() returned null for mint:",
-                  mintPubkey.toString()
-                );
-              }
+              const sss = await SolanaStablecoin.fetch(connection, mintPubkey);
+              if (!sss) continue;
+
+              const isMasterAuthority =
+                sss.masterAuthority?.equals(walletPubkey);
+              const isMinter = sss.minters.some((m) => m.equals(walletPubkey));
+              const isFreezer = sss.freezer?.equals(walletPubkey);
+
+              if (!isMasterAuthority && !isMinter && !isFreezer) continue;
+
+              const supply = await sss.getTotalSupply();
+              sssTokens.push({
+                mint: mintPubkey.toString(),
+                config: configPubkey.toString(),
+                authority: sss.masterAuthority?.toString() ?? "",
+                supply: rawSupply,
+                decimals: sss.decimals,
+                paused: sss.paused,
+                complianceAttached: await sss.compliance.isAttached(),
+                privacyAttached: await sss.privacy.isAttached(),
+                minters: sss.minters.map((m) => m.toString()),
+                freezer: sss.freezer?.toString() ?? "",
+              });
             } catch (e) {
               console.warn(
                 `Failed to load config ${configPubkey.toString()}`,
@@ -1241,81 +1237,79 @@ export function useSolana() {
       if (!connected) return [];
       try {
         const mintPubkey = new PublicKey(token.mint);
+        const configPubkey = new PublicKey(token.config);
         const signatures = await connection.getSignaturesForAddress(
           mintPubkey,
           { limit: 20 }
         );
-        const seizeDiscriminator =
-          getInstructionDiscriminator("seize").toString("hex");
-        const seizeActions: Map<
-          string,
-          {
-            from: string;
-            to: string;
-            amount: string;
-            time: string;
-            txn: string;
-          }
-        > = new Map();
+
+        const results: {
+          from: string;
+          fromFull: string;
+          to: string;
+          amount: string;
+          txn: string;
+          time: string;
+        }[] = [];
 
         for (const sig of signatures) {
           try {
             const tx = await connection.getParsedTransaction(sig.signature, {
               maxSupportedTransactionVersion: 0,
             });
-            if (!tx?.meta?.logMessages) continue;
+            if (!tx) continue;
 
-            for (const log of tx.meta.logMessages) {
-              if (!log.includes("Program data:")) continue;
+            for (const ix of tx.transaction.message.instructions) {
+              if (ix.programId.toString() !== PROGRAM_ID.toString()) continue;
+              if (!("accounts" in ix) || ix.accounts.length < 7) continue;
+
+              // config is at index 0 — filter to this token only
+              if (ix.accounts[0].toString() !== configPubkey.toString())
+                continue;
+
+              const fromAta = ix.accounts[4].toString();
+              const toAta = ix.accounts[5].toString();
+
+              // Get amount from inner transferChecked instruction
+              let amount = "?";
               try {
-                const dataBuffer = Buffer.from(
-                  log.replace("Program data: ", ""),
-                  "base64"
+                const inner = tx.meta?.innerInstructions?.find(
+                  (ii) =>
+                    ii.index === tx.transaction.message.instructions.indexOf(ix)
                 );
-                if (dataBuffer.length < 80) continue;
-                if (
-                  dataBuffer.slice(0, 8).toString("hex") !== seizeDiscriminator
-                )
-                  continue;
-
-                const from = new PublicKey(dataBuffer.slice(8, 40)).toString();
-                const to = new PublicKey(dataBuffer.slice(40, 72)).toString();
-                const amount = new DataView(
-                  dataBuffer.buffer,
-                  dataBuffer.byteOffset
-                ).getBigUint64(72, true);
-
-                seizeActions.set(from, {
-                  from,
-                  to,
-                  amount: (
-                    Number(amount) / Math.pow(10, token.decimals)
-                  ).toLocaleString(undefined, {
+                const transferIx = inner?.instructions.find(
+                  (i) => "parsed" in i && i.parsed?.type === "transferChecked"
+                );
+                if (transferIx && "parsed" in transferIx) {
+                  const raw =
+                    transferIx.parsed.info.tokenAmount?.uiAmountString ??
+                    transferIx.parsed.info.amount;
+                  amount = Number(raw).toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
-                  }),
-                  txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(
-                    -4
-                  )}`,
-                  time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
-                });
+                  });
+                }
               } catch {
-                /* skip */
+                /* use fallback */
               }
+
+              results.push({
+                from: `${fromAta.slice(0, 4)}...${fromAta.slice(-4)}`,
+                fromFull: fromAta,
+                to: `${toAta.slice(0, 4)}...${toAta.slice(-4)}`,
+                amount,
+                txn: `${sig.signature.slice(0, 4)}...${sig.signature.slice(
+                  -4
+                )}`,
+                time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
+              });
             }
           } catch {
             /* skip */
           }
         }
 
-        return [...seizeActions.values()].map((data) => ({
-          from: `${data.from.slice(0, 4)}...${data.from.slice(-4)}`,
-          fromFull: data.from,
-          to: data.to,
-          amount: data.amount,
-          txn: data.txn,
-          time: data.time,
-        }));
+        return results;
       } catch (err) {
         console.error("Error fetching seize history:", err);
         return [];
@@ -1437,59 +1431,26 @@ export function useSolana() {
           configPubkey,
           { limit: 50 }
         );
-        const blacklistAddDiscriminator = "03c44e886fc5bc72";
-        const entries: Map<string, { target: string; reason?: string }> =
-          new Map();
+
+        const targets: Set<string> = new Set();
 
         for (const sig of signatures) {
           try {
             const tx = await connection.getParsedTransaction(sig.signature, {
               maxSupportedTransactionVersion: 0,
             });
-            if (!tx?.meta?.logMessages) continue;
+            if (!tx) continue;
 
-            for (const log of tx.meta.logMessages) {
-              if (!log.includes("Program data:")) continue;
-              try {
-                const dataBuffer = Buffer.from(
-                  log.replace("Program data: ", ""),
-                  "base64"
-                );
-                if (dataBuffer.length < 8) continue;
-                if (
-                  dataBuffer.slice(0, 8).toString("hex") !==
-                  blacklistAddDiscriminator
-                )
-                  continue;
+            for (const ix of tx.transaction.message.instructions) {
+              if (ix.programId.toString() !== PROGRAM_ID.toString()) continue;
+              if (!("accounts" in ix) || ix.accounts.length < 6) continue;
 
-                let reason: string | undefined;
-                if (dataBuffer.length > 12) {
-                  const reasonLength = dataBuffer.readUInt32LE(8);
-                  if (reasonLength > 0 && reasonLength < 200) {
-                    reason = dataBuffer
-                      .slice(12, 12 + reasonLength)
-                      .toString("utf8");
-                  }
-                }
+              // accounts: [blacklist_entry, compliance_module, config, blacklister, target, system_program]
+              const ixConfig = ix.accounts[2].toString();
+              if (ixConfig !== configPubkey.toString()) continue;
 
-                const accountKeys = tx.transaction.message.accountKeys;
-                const keys = Array.isArray(accountKeys)
-                  ? accountKeys
-                  : Object.values(accountKeys);
-                if (keys.length > 4) {
-                  const targetAcc = keys[4];
-                  const target =
-                    typeof targetAcc === "string"
-                      ? targetAcc
-                      : targetAcc.pubkey;
-                  entries.set(target.toString(), {
-                    target: target.toString(),
-                    reason,
-                  });
-                }
-              } catch {
-                /* skip */
-              }
+              // index 4 is the target wallet
+              targets.add(ix.accounts[4].toString());
             }
           } catch {
             /* skip */
@@ -1504,26 +1465,37 @@ export function useSolana() {
           time: string;
         }[] = [];
 
-        for (const entry of entries.values()) {
+        for (const target of targets) {
           try {
             const [blacklistPDA] = await getBlacklistPda(
               configPubkey,
-              new PublicKey(entry.target)
+              new PublicKey(target)
             );
             const accountInfo = await connection.getAccountInfo(blacklistPDA);
-            if (accountInfo && accountInfo.data.length > 0) {
-              result.push({
-                address: `${entry.target.slice(0, 4)}...${entry.target.slice(
-                  -4
-                )}`,
-                addressFull: entry.target,
-                reason: entry.reason,
-                txn: "",
-                time: "",
-              });
+            if (!accountInfo || accountInfo.data.length === 0) continue;
+
+            // Layout: discriminator(8) + blacklister(32) + reason_len(4) + reason_data(n) + ...
+            let reason: string | undefined;
+            try {
+              const reasonLen = accountInfo.data.readUInt32LE(40); // 8 + 32
+              if (reasonLen > 0 && reasonLen <= 128) {
+                reason = accountInfo.data
+                  .slice(44, 44 + reasonLen)
+                  .toString("utf8");
+              }
+            } catch {
+              /* no reason */
             }
+
+            result.push({
+              address: `${target.slice(0, 4)}...${target.slice(-4)}`,
+              addressFull: target,
+              reason,
+              txn: "",
+              time: "",
+            });
           } catch {
-            /* skip */
+            /* PDA doesn't exist — was removed */
           }
         }
 
