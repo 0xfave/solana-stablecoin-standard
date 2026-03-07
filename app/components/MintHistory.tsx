@@ -8,7 +8,7 @@ interface MintHistoryProps {
 }
 
 export default function MintHistory({ token }: MintHistoryProps) {
-  const { mint, fetchMintHistory } = useSolana();
+  const { mint, fetchMintHistory, refreshTokens } = useSolana();
 
   const [showMintModal, setShowMintModal] = useState(false);
   const [recipientAddress, setRecipientAddress] = useState("");
@@ -62,7 +62,7 @@ export default function MintHistory({ token }: MintHistoryProps) {
       setShowSuccessModal(true);
       setRecipientAddress("");
       setMintAmount("");
-      await refreshMintHistory();
+      await Promise.all([refreshMintHistory(), refreshTokens(true)]);
     } catch (err) {
       console.error("Error minting:", err);
       alert(err instanceof Error ? err.message : "Failed to mint tokens");

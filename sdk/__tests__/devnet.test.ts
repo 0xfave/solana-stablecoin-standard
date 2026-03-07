@@ -154,10 +154,20 @@ async function waitForAccountClose(
 async function confirm(connection: Connection, sig: string): Promise<void> {
   const { blockhash, lastValidBlockHeight } =
     await connection.getLatestBlockhash();
-  await connection.confirmTransaction(
+  const result = await connection.confirmTransaction(
     { signature: sig, blockhash, lastValidBlockHeight },
     "confirmed"
   );
+  if (result.value.err) {
+    const tx = await connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    const logs = tx?.meta?.logMessages?.join("\n") ?? "(no logs)";
+    throw new Error(
+      `Transaction ${sig.slice(0, 8)} failed on-chain:\n${JSON.stringify(result.value.err)}\n${logs}`
+    );
+  }
 }
 
 /** Read token balance */
@@ -556,13 +566,13 @@ describe("Live devnet — Privacy module", () => {
     const sig = await stablecoin.transfer({
       from: ataA,
       to: ataB,
-      fromOwner: userA.publicKey,
+      fromOwner: payer.publicKey,  // payer owns ataA — payer can sign
       toOwner: userB.publicKey,
       amount: 100_000_000,
       authority: payerSigner,
     });
     await confirm(connection, sig);
-
+  
     const after = await tokenBalance(connection, ataB);
     expect(after).toBe(before + 100_000_000n);
     console.log(`  Transfer succeeded. UserB balance: ${after}`);

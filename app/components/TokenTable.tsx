@@ -10,16 +10,18 @@ export default function TokenTable() {
     isLoading,
     refreshTokens,
     createToken,
-    addMinter,
-    addFreezer,
+    attachComplianceModule,
+    detachComplianceModule,
+    attachPrivacyModule,
+    detachPrivacyModule,
     pauseToken,
     selectedToken,
     setSelectedToken,
   } = useSolana();
 
+  // ─── Create token ─────────────────────────────────────────────────────────
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [showMinterSuccess, setShowMinterSuccess] = useState(false);
   const [createdToken, setCreatedToken] = useState<{
     name: string;
     symbol: string;
@@ -28,44 +30,53 @@ export default function TokenTable() {
   const [creating, setCreating] = useState(false);
   const [tokenName, setTokenName] = useState("");
   const [tokenSymbol, setTokenSymbol] = useState("");
-  const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
 
-  const [showAddMinterModal, setShowAddMinterModal] = useState(false);
-  const [minterAddress, setMinterAddress] = useState("");
-  const [addingMinter, setAddingMinter] = useState(false);
+  // ─── Compliance module ────────────────────────────────────────────────────
+  const [showComplianceModal, setShowComplianceModal] = useState(false);
+  const [complianceToken, setComplianceToken] = useState<SssToken | null>(null);
+  const [blacklisterAddress, setBlacklisterAddress] = useState("");
+  const [complianceLoading, setComplianceLoading] = useState(false);
 
-  const [showAddFreezerModal, setShowAddFreezerModal] = useState(false);
-  const [freezerAddress, setFreezerAddress] = useState("");
-  const [addingFreezer, setAddingFreezer] = useState(false);
-  const [showFreezerSuccess, setShowFreezerSuccess] = useState(false);
+  // ─── Privacy module ───────────────────────────────────────────────────────
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [privacyToken, setPrivacyToken] = useState<SssToken | null>(null);
+  const [allowlistAuthority, setAllowlistAuthority] = useState("");
+  const [privacyLoading, setPrivacyLoading] = useState(false);
 
+  // ─── Pause ────────────────────────────────────────────────────────────────
   const [pausingToken, setPausingToken] = useState<string | null>(null);
 
+  // ─── Supply formatter ─────────────────────────────────────────────────────
   const formatSupply = (supply: string, decimals: number) => {
     try {
       const num = Number(supply) / Math.pow(10, decimals);
-      return num.toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
+      if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1)}B`;
+      if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+      if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+      return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
     } catch {
       return supply;
     }
   };
 
+  // ─── Tier badge ───────────────────────────────────────────────────────────
+  const getTier = (token: SssToken) => {
+    if (token.privacyAttached)
+      return { label: "SSS-3", color: "bg-purple-500/20 text-purple-400" };
+    if (token.complianceAttached)
+      return { label: "SSS-2", color: "bg-blue-500/20 text-blue-400" };
+    return { label: "SSS-1", color: "bg-slate-500/20 text-slate-400" };
+  };
+
+  // ─── Handlers — create ────────────────────────────────────────────────────
   const handleCreateToken = async () => {
-    if (!tokenName || !tokenSymbol || selectedPreset === null) {
+    if (!tokenName || !tokenSymbol) {
       alert("Please fill in all fields");
       return;
     }
     setCreating(true);
     try {
-      const result = await createToken(
-        selectedPreset,
-        6,
-        tokenName,
-        tokenSymbol
-      );
+      const result = await createToken(6, tokenName, tokenSymbol);
       setShowCreateModal(false);
       setCreatedToken({
         name: tokenName,
@@ -75,53 +86,94 @@ export default function TokenTable() {
       setShowSuccessModal(true);
       setTokenName("");
       setTokenSymbol("");
-      setSelectedPreset(null);
     } catch (err) {
-      console.error("Error creating token:", err);
       alert(err instanceof Error ? err.message : "Failed to create token");
     } finally {
       setCreating(false);
     }
   };
 
-  const handleAddMinter = async () => {
-    if (!selectedToken || !minterAddress) {
-      alert("Please enter a minter address");
-      return;
-    }
-    setAddingMinter(true);
+  // ─── Handlers — compliance ────────────────────────────────────────────────
+  const openComplianceModal = (token: SssToken) => {
+    setComplianceToken(token);
+    setBlacklisterAddress("");
+    setShowComplianceModal(true);
+  };
+
+  const handleAttachCompliance = async () => {
+    if (!complianceToken || !blacklisterAddress) return;
+    setComplianceLoading(true);
     try {
-      await addMinter(selectedToken, minterAddress);
-      setShowAddMinterModal(false);
-      setSelectedToken(null);
-      setMinterAddress("");
-      setShowMinterSuccess(true);
+      await attachComplianceModule(complianceToken, blacklisterAddress);
+      setShowComplianceModal(false);
+      setBlacklisterAddress("");
     } catch (err) {
-      console.error("Error adding minter:", err);
-      alert(err instanceof Error ? err.message : "Failed to add minter");
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Failed to attach compliance module"
+      );
     } finally {
-      setAddingMinter(false);
+      setComplianceLoading(false);
     }
   };
 
-  const handleAddFreezer = async () => {
-    if (!selectedToken || !freezerAddress) {
-      alert("Please enter a freezer address");
-      return;
-    }
-    setAddingFreezer(true);
+  const handleDetachCompliance = async () => {
+    if (!complianceToken) return;
+    setComplianceLoading(true);
     try {
-      await addFreezer(selectedToken, freezerAddress);
-      setShowAddFreezerModal(false);
-      setShowFreezerSuccess(true);
+      await detachComplianceModule(complianceToken);
+      setShowComplianceModal(false);
     } catch (err) {
-      console.error("Error adding freezer:", err);
-      alert(err instanceof Error ? err.message : "Failed to add freezer");
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Failed to detach compliance module"
+      );
     } finally {
-      setAddingFreezer(false);
+      setComplianceLoading(false);
     }
   };
 
+  // ─── Handlers — privacy ───────────────────────────────────────────────────
+  const openPrivacyModal = (token: SssToken) => {
+    setPrivacyToken(token);
+    setAllowlistAuthority("");
+    setShowPrivacyModal(true);
+  };
+
+  const handleAttachPrivacy = async () => {
+    if (!privacyToken || !allowlistAuthority) return;
+    setPrivacyLoading(true);
+    try {
+      await attachPrivacyModule(privacyToken, allowlistAuthority);
+      setShowPrivacyModal(false);
+      setAllowlistAuthority("");
+    } catch (err) {
+      alert(
+        err instanceof Error ? err.message : "Failed to attach privacy module"
+      );
+    } finally {
+      setPrivacyLoading(false);
+    }
+  };
+
+  const handleDetachPrivacy = async () => {
+    if (!privacyToken) return;
+    setPrivacyLoading(true);
+    try {
+      await detachPrivacyModule(privacyToken);
+      setShowPrivacyModal(false);
+    } catch (err) {
+      alert(
+        err instanceof Error ? err.message : "Failed to detach privacy module"
+      );
+    } finally {
+      setPrivacyLoading(false);
+    }
+  };
+
+  // ─── Handler — pause ──────────────────────────────────────────────────────
   const handleTogglePause = async (token: SssToken) => {
     setPausingToken(token.mint);
     try {
@@ -133,25 +185,6 @@ export default function TokenTable() {
     } finally {
       setPausingToken(null);
     }
-  };
-
-  const openAddMinterModal = (token: SssToken) => {
-    setSelectedToken(token);
-    setMinterAddress("");
-    setShowAddMinterModal(true);
-  };
-
-  const openAddFreezerModal = (token: SssToken) => {
-    setSelectedToken(token);
-    setFreezerAddress("");
-    setShowAddFreezerModal(true);
-  };
-
-  const openModal = () => {
-    setSelectedPreset(null);
-    setTokenName("");
-    setTokenSymbol("");
-    setShowCreateModal(true);
   };
 
   if (!connected) {
@@ -182,6 +215,7 @@ export default function TokenTable() {
         <div className="absolute top-0 right-0 p-2 opacity-10 font-mono text-xs">
           SYS_LOG_09X
         </div>
+
         <div className="flex justify-between items-end mb-6">
           <div>
             <h2 className="text-sm font-mono text-[#25d1f4] mb-1 uppercase tracking-widest flex items-center gap-2">
@@ -198,7 +232,11 @@ export default function TokenTable() {
               Refresh
             </button>
             <button
-              onClick={() => openModal()}
+              onClick={() => {
+                setTokenName("");
+                setTokenSymbol("");
+                setShowCreateModal(true);
+              }}
               className="bg-[#25d1f4] text-black px-4 py-2 text-xs font-bold uppercase hover:bg-white transition-colors"
             >
               Create New Token
@@ -215,100 +253,139 @@ export default function TokenTable() {
             No SSS tokens found for this wallet
           </div>
         ) : (
-          // ✅ Fixed height showing max 4 tokens, scrollable
           <div className="overflow-x-auto">
+            {/* Fixed header */}
             <table className="w-full text-left border-collapse">
               <thead className="text-[10px] uppercase font-mono text-slate-500 border-b border-white/5">
                 <tr>
-                  <th className="pb-3 px-4">Token Address</th>
-                  <th className="pb-3 px-4">Total Supply</th>
+                  <th className="pb-3 px-4">Token</th>
+                  <th className="pb-3 px-4">Supply</th>
+                  <th className="pb-3 px-4">Tier</th>
                   <th className="pb-3 px-4 text-center" colSpan={4}>
-                    Management Operations
+                    Modules &amp; Actions
                   </th>
                   <th className="pb-3 px-4 text-right">State</th>
                 </tr>
               </thead>
             </table>
-            {/* ✅ Scrollable body capped at 4 rows */}
-            <div className="overflow-y-auto no-scrollbar" style={{ maxHeight: "224px" }}>
+
+            {/* Scrollable rows */}
+            <div
+              className="overflow-y-auto no-scrollbar"
+              style={{ maxHeight: "224px" }}
+            >
               <table className="w-full text-left border-collapse">
                 <tbody className="text-sm">
-                  {tokens.map((token, i) => (
-                    <tr
-                      key={i}
-                      className="border-b border-white/5 hover:bg-white/5 group transition-colors"
-                    >
-                      <td className="py-4 px-4 font-bold text-[#25d1f4] w-[160px]">
-                        {token.name
-                          ? `${token.name} (${token.symbol})`
-                          : `${token.mint.slice(0, 8)}...${token.mint.slice(
-                              -4
-                            )}`}
-                      </td>
-                      <td className="py-4 px-4 font-mono">
-                        {formatSupply(token.supply, token.decimals)}
-                      </td>
-                      <td className="py-4 px-1">
-                        <button
-                          onClick={() => openAddMinterModal(token)}
-                          className="w-full text-[10px] border border-white/20 py-1 px-2 hover:border-[#25d1f4] transition-colors uppercase"
-                        >
-                          Add Minter
-                        </button>
-                      </td>
-                      <td className="py-4 px-1">
-                        <button
-                          onClick={() => openAddFreezerModal(token)}
-                          className="w-full text-[10px] border border-white/20 py-1 px-2 hover:border-[#25d1f4] transition-colors uppercase"
-                        >
-                          Add Freezer
-                        </button>
-                      </td>
-                      <td className="py-4 px-1">
-                        {/* ✅ Pause / Unpause button */}
-                        <button
-                          onClick={() => handleTogglePause(token)}
-                          disabled={pausingToken === token.mint}
-                          className={`w-full text-[10px] border py-1 px-2 transition-all uppercase disabled:opacity-50 ${
-                            token.paused
-                              ? "border-green-500/40 text-green-400 hover:bg-green-500/20"
-                              : "border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20"
-                          }`}
-                        >
-                          {pausingToken === token.mint
-                            ? "..."
-                            : token.paused
-                            ? "Unpause"
-                            : "Pause"}
-                        </button>
-                      </td>
-                      <td className="py-4 px-1">
-                        <button
-                          onClick={() => setSelectedToken(token)}
-                          className={`w-full text-[10px] border py-1 px-2 transition-all uppercase ${
-                            selectedToken?.mint === token.mint
-                              ? "bg-[#25d1f4] text-black border-[#25d1f4]"
-                              : "bg-[#25d1f4]/20 text-[#25d1f4] border-[#25d1f4]/40 hover:bg-[#25d1f4] hover:text-black"
-                          }`}
-                        >
-                          {selectedToken?.mint === token.mint
-                            ? "Selected"
-                            : "Select"}
-                        </button>
-                      </td>
-                      <td className="py-4 px-4 text-right">
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${
-                            token.paused
-                              ? "bg-yellow-500/20 text-yellow-400"
-                              : "bg-green-500/20 text-green-400"
-                          }`}
-                        >
-                          {token.paused ? "Paused" : "Active"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {tokens.map((token, i) => {
+                    const tier = getTier(token);
+                    return (
+                      <tr
+                        key={i}
+                        className="border-b border-white/5 hover:bg-white/5 transition-colors"
+                      >
+                        {/* Token name */}
+                        <td className="py-4 px-4 font-bold text-[#25d1f4] w-[160px]">
+                          {token.name
+                            ? `${token.name} (${token.symbol})`
+                            : `${token.mint.slice(0, 8)}...${token.mint.slice(
+                                -4
+                              )}`}
+                        </td>
+
+                        {/* Supply */}
+                        <td className="py-4 px-4 font-mono text-sm">
+                          {formatSupply(token.supply, token.decimals)}
+                        </td>
+
+                        {/* Tier badge */}
+                        <td className="py-4 px-4">
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-mono ${tier.color}`}
+                          >
+                            {tier.label}
+                          </span>
+                        </td>
+
+                        {/* Compliance module button */}
+                        <td className="py-4 px-1">
+                          <button
+                            onClick={() => openComplianceModal(token)}
+                            className={`w-full text-[10px] border py-1 px-2 transition-colors uppercase ${
+                              token.complianceAttached
+                                ? "border-blue-500/40 text-blue-400 hover:bg-blue-500/20"
+                                : "border-white/20 text-slate-400 hover:border-[#25d1f4] hover:text-[#25d1f4]"
+                            }`}
+                          >
+                            {token.complianceAttached
+                              ? "Compliance ✓"
+                              : "Compliance"}
+                          </button>
+                        </td>
+
+                        {/* Privacy module button */}
+                        <td className="py-4 px-1">
+                          <button
+                            onClick={() => openPrivacyModal(token)}
+                            className={`w-full text-[10px] border py-1 px-2 transition-colors uppercase ${
+                              token.privacyAttached
+                                ? "border-purple-500/40 text-purple-400 hover:bg-purple-500/20"
+                                : "border-white/20 text-slate-400 hover:border-[#25d1f4] hover:text-[#25d1f4]"
+                            }`}
+                          >
+                            {token.privacyAttached ? "Privacy ✓" : "Privacy"}
+                          </button>
+                        </td>
+
+                        {/* Pause / Unpause */}
+                        <td className="py-4 px-1">
+                          <button
+                            onClick={() => handleTogglePause(token)}
+                            disabled={pausingToken === token.mint}
+                            className={`w-full text-[10px] border py-1 px-2 transition-all uppercase disabled:opacity-50 ${
+                              token.paused
+                                ? "border-green-500/40 text-green-400 hover:bg-green-500/20"
+                                : "border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20"
+                            }`}
+                          >
+                            {pausingToken === token.mint
+                              ? "..."
+                              : token.paused
+                              ? "Unpause"
+                              : "Pause"}
+                          </button>
+                        </td>
+
+                        {/* Select */}
+                        <td className="py-4 px-1">
+                          <button
+                            onClick={() => setSelectedToken(token)}
+                            className={`w-full text-[10px] border py-1 px-2 transition-all uppercase ${
+                              selectedToken?.mint === token.mint
+                                ? "bg-[#25d1f4] text-black border-[#25d1f4]"
+                                : "bg-[#25d1f4]/20 text-[#25d1f4] border-[#25d1f4]/40 hover:bg-[#25d1f4] hover:text-black"
+                            }`}
+                          >
+                            {selectedToken?.mint === token.mint
+                              ? "Selected"
+                              : "Select"}
+                          </button>
+                        </td>
+
+                        {/* Active / Paused state */}
+                        <td className="py-4 px-4 text-right">
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full uppercase ${
+                              token.paused
+                                ? "bg-yellow-500/20 text-yellow-400"
+                                : "bg-green-500/20 text-green-400"
+                            }`}
+                          >
+                            {token.paused ? "Paused" : "Active"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -324,335 +401,305 @@ export default function TokenTable() {
         )}
       </section>
 
-      {/* Create Token Modal */}
+      {/* ── Create Token Modal ─────────────────────────────────────────────── */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold mb-4 text-[#25d1f4]">
+            <h3 className="text-lg font-bold mb-2 text-[#25d1f4]">
               Create New Token
             </h3>
-            {selectedPreset === null ? (
-              <>
-                <p className="text-sm text-slate-400 mb-6">
-                  Select a preset for your stablecoin:
-                </p>
-                <div className="space-y-3">
-                  <button
-                    onClick={() => setSelectedPreset(0)}
-                    className="w-full p-4 border border-[#25d1f4]/40 bg-[#25d1f4]/10 hover:bg-[#25d1f4]/20 rounded-md text-left transition-colors"
-                  >
-                    <div className="font-bold text-[#25d1f4]">SSS-1</div>
-                    <div className="text-xs text-slate-400">
-                      Basic stablecoin - no compliance features
-                    </div>
-                  </button>
-                  <button
-                    onClick={() => setSelectedPreset(1)}
-                    className="w-full p-4 border border-[#25d1f4]/40 bg-[#25d1f4]/10 hover:bg-[#25d1f4]/20 rounded-md text-left transition-colors"
-                  >
-                    <div className="font-bold text-[#25d1f4]">SSS-2</div>
-                    <div className="text-xs text-slate-400">
-                      Compliant stablecoin - blacklist, freeze, seize
-                    </div>
-                  </button>
+            <p className="text-sm text-slate-400 mb-6">
+              Creates an SSS-1 token. Attach the Compliance Module afterwards to
+              upgrade to SSS-2, or both modules for SSS-3.
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1 uppercase">
+                  Token Name
+                </label>
+                <input
+                  type="text"
+                  value={tokenName}
+                  onChange={(e) => setTokenName(e.target.value)}
+                  placeholder="My Stablecoin"
+                  className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1 uppercase">
+                  Symbol
+                </label>
+                <input
+                  type="text"
+                  value={tokenSymbol}
+                  onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
+                  placeholder="MYS"
+                  maxLength={10}
+                  className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
+                />
+              </div>
+              <button
+                onClick={handleCreateToken}
+                disabled={creating || !tokenName || !tokenSymbol}
+                className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {creating ? "Creating..." : "Create Token"}
+              </button>
+              <button
+                onClick={() => {
+                  setShowCreateModal(false);
+                  setTokenName("");
+                  setTokenSymbol("");
+                }}
+                className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Success Modal ───────────────────────────────────────────── */}
+      {showSuccessModal && createdToken && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4 text-center">
+            <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg
+                className="w-8 h-8 text-green-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold mb-4 text-green-400">
+              Token Created!
+            </h3>
+            <div className="space-y-2 text-sm">
+              <div className="bg-black/30 rounded p-3">
+                <div className="text-slate-400 text-xs uppercase">
+                  Token Name
                 </div>
+                <div className="text-[#25d1f4] font-bold">
+                  {createdToken.name}
+                </div>
+              </div>
+              <div className="bg-black/30 rounded p-3">
+                <div className="text-slate-400 text-xs uppercase">Symbol</div>
+                <div className="text-[#25d1f4] font-bold">
+                  {createdToken.symbol}
+                </div>
+              </div>
+              <div className="bg-black/30 rounded p-3">
+                <div className="text-slate-400 text-xs uppercase">
+                  Mint Address
+                </div>
+                <div className="text-white font-mono text-xs break-all">
+                  {createdToken.mint}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowSuccessModal(false)}
+              className="mt-4 w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Compliance Module Modal ────────────────────────────────────────── */}
+      {showComplianceModal && complianceToken && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
+            <h3 className="text-lg font-bold mb-2 text-[#25d1f4]">
+              Compliance Module
+            </h3>
+            <p className="text-sm text-slate-400 mb-1">
+              {complianceToken.name ||
+                `${complianceToken.mint.slice(
+                  0,
+                  8
+                )}...${complianceToken.mint.slice(-4)}`}
+            </p>
+            <div
+              className={`inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full mb-6 ${
+                complianceToken.complianceAttached
+                  ? "bg-blue-500/20 text-blue-400"
+                  : "bg-slate-500/20 text-slate-400"
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  complianceToken.complianceAttached
+                    ? "bg-blue-400"
+                    : "bg-slate-500"
+                }`}
+              />
+              {complianceToken.complianceAttached ? "Attached" : "Not attached"}
+            </div>
+
+            {complianceToken.complianceAttached ? (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-400">
+                  Detaching removes blacklist enforcement from all transfers.
+                  Existing blacklist entries are not deleted.
+                </p>
                 <button
-                  onClick={() => setShowCreateModal(false)}
-                  className="mt-4 w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
+                  onClick={handleDetachCompliance}
+                  disabled={complianceLoading}
+                  className="w-full py-3 border border-red-500/40 text-red-400 hover:bg-red-500/20 text-sm font-bold uppercase transition-colors disabled:opacity-50"
+                >
+                  {complianceLoading
+                    ? "Detaching..."
+                    : "Detach Compliance Module"}
+                </button>
+                <button
+                  onClick={() => setShowComplianceModal(false)}
+                  className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors text-sm"
                 >
                   Cancel
                 </button>
-              </>
+              </div>
             ) : (
-              <>
-                <p className="text-sm text-slate-400 mb-6">
-                  Configure your stablecoin:
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400">
+                  Attaching enables blacklist enforcement on transfers and
+                  upgrades this token to SSS-2.
                 </p>
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1 uppercase">
-                      Token Name
-                    </label>
-                    <input
-                      type="text"
-                      value={tokenName}
-                      onChange={(e) => setTokenName(e.target.value)}
-                      placeholder="My Stablecoin"
-                      className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1 uppercase">
-                      Symbol
-                    </label>
-                    <input
-                      type="text"
-                      value={tokenSymbol}
-                      onChange={(e) =>
-                        setTokenSymbol(e.target.value.toUpperCase())
-                      }
-                      placeholder="MYS"
-                      maxLength={10}
-                      className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-slate-400 mb-1 uppercase">
-                      Preset
-                    </label>
-                    <div className="text-sm text-[#25d1f4]">
-                      {selectedPreset === 0
-                        ? "SSS-1 (Basic)"
-                        : "SSS-2 (Compliant)"}
-                    </div>
-                  </div>
-                  <button
-                    onClick={handleCreateToken}
-                    disabled={creating || !tokenName || !tokenSymbol}
-                    className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {creating ? "Creating..." : "Create Token"}
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSelectedPreset(null);
-                      setTokenName("");
-                      setTokenSymbol("");
-                    }}
-                    className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
-                  >
-                    Back
-                  </button>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1 uppercase">
+                    Blacklister Address
+                  </label>
+                  <input
+                    type="text"
+                    value={blacklisterAddress}
+                    onChange={(e) => setBlacklisterAddress(e.target.value)}
+                    placeholder="Wallet allowed to blacklist addresses"
+                    className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none text-sm"
+                  />
                 </div>
-              </>
+                <button
+                  onClick={handleAttachCompliance}
+                  disabled={complianceLoading || !blacklisterAddress}
+                  className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {complianceLoading
+                    ? "Attaching..."
+                    : "Attach Compliance Module"}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowComplianceModal(false);
+                    setBlacklisterAddress("");
+                  }}
+                  className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Success Modal */}
-      {showSuccessModal && createdToken && (
+      {/* ── Privacy Module Modal ───────────────────────────────────────────── */}
+      {showPrivacyModal && privacyToken && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
-            <div className="text-center">
-              <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg
-                  className="w-8 h-8 text-green-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+            <h3 className="text-lg font-bold mb-2 text-[#25d1f4]">
+              Privacy Module
+            </h3>
+            <p className="text-sm text-slate-400 mb-1">
+              {privacyToken.name ||
+                `${privacyToken.mint.slice(0, 8)}...${privacyToken.mint.slice(
+                  -4
+                )}`}
+            </p>
+            <div
+              className={`inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full mb-6 ${
+                privacyToken.privacyAttached
+                  ? "bg-purple-500/20 text-purple-400"
+                  : "bg-slate-500/20 text-slate-400"
+              }`}
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  privacyToken.privacyAttached
+                    ? "bg-purple-400"
+                    : "bg-slate-500"
+                }`}
+              />
+              {privacyToken.privacyAttached ? "Attached" : "Not attached"}
+            </div>
+
+            {privacyToken.privacyAttached ? (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-400">
+                  Detaching removes allowlist enforcement. All addresses will be
+                  able to transfer freely.
+                </p>
+                <button
+                  onClick={handleDetachPrivacy}
+                  disabled={privacyLoading}
+                  className="w-full py-3 border border-red-500/40 text-red-400 hover:bg-red-500/20 text-sm font-bold uppercase transition-colors disabled:opacity-50"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M5 13l4 4L19 7"
+                  {privacyLoading ? "Detaching..." : "Detach Privacy Module"}
+                </button>
+                <button
+                  onClick={() => setShowPrivacyModal(false)}
+                  className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400">
+                  Attaching enables allowlist-only transfers. Only wallets on
+                  the allowlist can send or receive.
+                  {privacyToken.complianceAttached
+                    ? " Combined with Compliance, this upgrades the token to SSS-3."
+                    : ""}
+                </p>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1 uppercase">
+                    Allowlist Authority
+                  </label>
+                  <input
+                    type="text"
+                    value={allowlistAuthority}
+                    onChange={(e) => setAllowlistAuthority(e.target.value)}
+                    placeholder="Wallet that manages the allowlist"
+                    className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none text-sm"
                   />
-                </svg>
-              </div>
-              <h3 className="text-lg font-bold mb-2 text-green-400">
-                Token Created!
-              </h3>
-              <div className="space-y-2 text-sm">
-                <div className="bg-black/30 rounded p-3">
-                  <div className="text-slate-400 text-xs uppercase">
-                    Token Name
-                  </div>
-                  <div className="text-[#25d1f4] font-bold">
-                    {createdToken.name}
-                  </div>
                 </div>
-                <div className="bg-black/30 rounded p-3">
-                  <div className="text-slate-400 text-xs uppercase">Symbol</div>
-                  <div className="text-[#25d1f4] font-bold">
-                    {createdToken.symbol}
-                  </div>
-                </div>
-                <div className="bg-black/30 rounded p-3">
-                  <div className="text-slate-400 text-xs uppercase">
-                    Mint Address
-                  </div>
-                  <div className="text-white font-mono text-xs break-all">
-                    {createdToken.mint}
-                  </div>
-                </div>
+                <button
+                  onClick={handleAttachPrivacy}
+                  disabled={privacyLoading || !allowlistAuthority}
+                  className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {privacyLoading ? "Attaching..." : "Attach Privacy Module"}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowPrivacyModal(false);
+                    setAllowlistAuthority("");
+                  }}
+                  className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors text-sm"
+                >
+                  Cancel
+                </button>
               </div>
-              <button
-                onClick={() => setShowSuccessModal(false)}
-                className="mt-4 w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Minter Modal */}
-      {showAddMinterModal && selectedToken && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold mb-4 text-[#25d1f4]">
-              Add Minter
-            </h3>
-            <p className="text-sm text-slate-400 mb-6">
-              Add a new minter address for token:{" "}
-              {selectedToken.mint.slice(0, 8)}...{selectedToken.mint.slice(-4)}
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1 uppercase">
-                  Minter Address
-                </label>
-                <input
-                  type="text"
-                  value={minterAddress}
-                  onChange={(e) => setMinterAddress(e.target.value)}
-                  placeholder="Enter minter wallet address"
-                  className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
-                />
-              </div>
-              <button
-                onClick={handleAddMinter}
-                disabled={addingMinter || !minterAddress}
-                className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {addingMinter ? "Adding..." : "Add Minter"}
-              </button>
-              <button
-                onClick={() => {
-                  setShowAddMinterModal(false);
-                  setSelectedToken(null);
-                  setMinterAddress("");
-                }}
-                className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Freezer Modal */}
-      {showAddFreezerModal && selectedToken && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="osint-card p-6 rounded-md max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold mb-4 text-[#25d1f4]">
-              Add Freezer
-            </h3>
-            <p className="text-sm text-slate-400 mb-6">
-              Add a new freezer address for token:{" "}
-              {selectedToken.mint.slice(0, 8)}...{selectedToken.mint.slice(-4)}
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1 uppercase">
-                  Freezer Address
-                </label>
-                <input
-                  type="text"
-                  value={freezerAddress}
-                  onChange={(e) => setFreezerAddress(e.target.value)}
-                  placeholder="Enter freezer wallet address"
-                  className="w-full bg-black/30 border border-white/20 rounded px-3 py-2 text-white placeholder-slate-600 focus:border-[#25d1f4] focus:outline-none"
-                />
-              </div>
-              <button
-                onClick={handleAddFreezer}
-                disabled={addingFreezer || !freezerAddress}
-                className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {addingFreezer ? "Adding..." : "Add Freezer"}
-              </button>
-              <button
-                onClick={() => {
-                  setShowAddFreezerModal(false);
-                  setSelectedToken(null);
-                  setFreezerAddress("");
-                }}
-                className="w-full py-2 border border-white/20 text-slate-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Freezer Success Modal */}
-      {showFreezerSuccess && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="osint-card p-6 rounded-md max-w-sm w-full mx-4 text-center">
-            <div className="w-12 h-12 bg-[#25d1f4]/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg
-                className="w-6 h-6 text-[#25d1f4]"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <h3 className="text-lg font-bold mb-2 text-white">
-              Freezer Added!
-            </h3>
-            <p className="text-sm text-slate-400 mb-6">
-              The freezer address has been successfully added.
-            </p>
-            <button
-              onClick={() => {
-                setShowFreezerSuccess(false);
-                setSelectedToken(null);
-                setFreezerAddress("");
-              }}
-              className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Minter Success Modal */}
-      {showMinterSuccess && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="osint-card p-6 rounded-md max-w-sm w-full mx-4 text-center">
-            <div className="w-12 h-12 bg-[#25d1f4]/20 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg
-                className="w-6 h-6 text-[#25d1f4]"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </div>
-            <h3 className="text-lg font-bold mb-2 text-white">Minter Added!</h3>
-            <p className="text-sm text-slate-400 mb-6">
-              The minter address has been successfully added. They can now mint
-              tokens.
-            </p>
-            <button
-              onClick={() => {
-                setShowMinterSuccess(false);
-                setSelectedToken(null);
-                setMinterAddress("");
-              }}
-              className="w-full bg-[#25d1f4] text-black py-3 font-bold uppercase hover:bg-white transition-colors"
-            >
-              Done
-            </button>
+            )}
           </div>
         </div>
       )}

@@ -10,7 +10,6 @@ import {
   SystemProgram,
 } from "@solana/web3.js";
 import {
-  getMint,
   getAssociatedTokenAddress,
   getAccount,
   createAssociatedTokenAccountInstruction,
@@ -20,20 +19,20 @@ import {
   SolanaStablecoin,
   getInstructionDiscriminator,
 } from "../../sdk/src/index";
-import { createHash } from "crypto";
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const RPC_URL =
   process.env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com";
 
+// Updated to match declare_id! in lib.rs
 const PROGRAM_ID = new PublicKey(
-  "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6"
+  "C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw"
 );
 
 const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
 export interface SssToken {
   mint: string;
   config: string;
@@ -43,13 +42,57 @@ export interface SssToken {
   name?: string;
   symbol?: string;
   paused: boolean;
-  preset: number;
+  complianceAttached: boolean;
+  privacyAttached: boolean;
   minters?: string[];
   freezer?: string;
-  blacklister?: string;
 }
 
-// ─── Pure Utilities (outside hook) ───────────────────────────────────────────
+// ─── PDA Derivation Helpers ───────────────────────────────────────────────────
+
+function getConfigPda(mint: PublicKey): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("stablecoin"), mint.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+function getCompliancePda(config: PublicKey): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("compliance"), config.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+function getPrivacyPda(config: PublicKey): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("privacy"), config.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+function getBlacklistPda(
+  config: PublicKey,
+  target: PublicKey
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("blacklist"), config.toBuffer(), target.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+// seeds: [allowlist, privacy_module, wallet]  — NOT [allowlist, config, wallet]
+function getAllowlistPda(
+  privacyModule: PublicKey,
+  target: PublicKey
+): Promise<[PublicKey, number]> {
+  return PublicKey.findProgramAddress(
+    [Buffer.from("allowlist"), privacyModule.toBuffer(), target.toBuffer()],
+    PROGRAM_ID
+  );
+}
+
+// ─── Misc Utilities ───────────────────────────────────────────────────────────
 
 function getTimeAgo(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000 - timestamp);
@@ -57,27 +100,6 @@ function getTimeAgo(timestamp: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
-}
-
-function getConfigPda(mintPubkey: PublicKey): Promise<[PublicKey, number]> {
-  return PublicKey.findProgramAddress(
-    [Buffer.from("stablecoin"), mintPubkey.toBuffer()],
-    PROGRAM_ID
-  );
-}
-
-function getBlacklistPda(
-  configPubkey: PublicKey,
-  targetPubkey: PublicKey
-): Promise<[PublicKey, number]> {
-  return PublicKey.findProgramAddress(
-    [
-      Buffer.from("blacklist"),
-      configPubkey.toBuffer(),
-      targetPubkey.toBuffer(),
-    ],
-    PROGRAM_ID
-  );
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -102,7 +124,7 @@ export function useSolana() {
 
   const walletAddress = publicKey || "";
 
-  // ─── Shared loading wrapper ───────────────────────────────────────────────
+  // ─── Shared helpers ───────────────────────────────────────────────────────
 
   const withLoading = useCallback(
     async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -121,8 +143,6 @@ export function useSolana() {
     []
   );
 
-  // ─── Shared signer builder ────────────────────────────────────────────────
-
   const buildSigner = useCallback(() => {
     if (!wallet || !publicKey) throw new Error("Wallet not connected");
     return {
@@ -135,7 +155,7 @@ export function useSolana() {
     };
   }, [wallet, publicKey]);
 
-  // ─── Clear tokens on wallet change ───────────────────────────────────────
+  // ─── Clear state on wallet change ────────────────────────────────────────
 
   useEffect(() => {
     if (
@@ -149,7 +169,7 @@ export function useSolana() {
     prevPublicKeyRef.current = publicKey;
   }, [publicKey, setSelectedToken]);
 
-  // ─── Fetch tokens ─────────────────────────────────────────────────────────
+  // ─── fetchTokens ──────────────────────────────────────────────────────────
 
   const fetchTokens = useCallback(
     async (immediate = false) => {
@@ -175,15 +195,17 @@ export function useSolana() {
           const sssTokens: SssToken[] = [];
 
           for (const { pubkey: configPubkey, account } of accounts) {
-            // Client-side guard: verify master_authority matches wallet
             const masterAuthority = new PublicKey(account.data.slice(8, 40));
             if (!masterAuthority.equals(walletPubkey)) continue;
 
             try {
               const mintPubkey = new PublicKey(account.data.slice(40, 72));
-
-              // ── Fetch via SDK — gets all parsed fields including roles ──
               const sss = await SolanaStablecoin.fetch(connection, mintPubkey);
+              const mintInfo = await connection.getParsedAccountInfo(
+                mintPubkey
+              );
+              const rawSupply =
+                (mintInfo.value?.data as any)?.parsed?.info?.supply ?? "0";
 
               if (sss) {
                 const supply = await sss.getTotalSupply();
@@ -191,13 +213,13 @@ export function useSolana() {
                   mint: mintPubkey.toString(),
                   config: configPubkey.toString(),
                   authority: walletPubkey.toString(),
-                  supply: supply.toString(),
+                  supply: rawSupply,
                   decimals: sss.decimals,
                   paused: sss.paused,
-                  preset: sss.preset,
+                  complianceAttached: await sss.compliance.isAttached(),
+                  privacyAttached: await sss.privacy.isAttached(),
                   minters: sss.minters.map((m) => m.toString()),
                   freezer: sss.freezer?.toString() ?? "",
-                  blacklister: sss.blacklister?.toString() ?? "",
                 });
               } else {
                 console.warn(
@@ -207,7 +229,7 @@ export function useSolana() {
               }
             } catch (e) {
               console.warn(
-                `Failed to fetch details for config ${configPubkey.toString()}`,
+                `Failed to load config ${configPubkey.toString()}`,
                 e
               );
             }
@@ -237,7 +259,6 @@ export function useSolana() {
     } else {
       setTokens([]);
     }
-    // intentionally excluding fetchTokens to avoid loop
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, publicKey]);
 
@@ -256,15 +277,10 @@ export function useSolana() {
   );
 
   // ─── createToken ──────────────────────────────────────────────────────────
+  // No preset — token starts as SSS-1; call attachComplianceModule to upgrade.
 
   const createToken = useCallback(
-    async (
-      preset: number,
-      decimals = 6,
-      name: string,
-      symbol: string,
-      supplyCap?: number
-    ) => {
+    async (decimals = 6, name: string, symbol: string, supplyCap?: number) => {
       if (!connected || !wallet || !publicKey)
         throw new Error("Wallet not connected");
 
@@ -273,7 +289,6 @@ export function useSolana() {
         const stablecoin = await SolanaStablecoin.create(connection, {
           name,
           symbol,
-          preset: preset as 0 | 1,
           decimals,
           supplyCap,
           authority: signer,
@@ -288,10 +303,191 @@ export function useSolana() {
           name,
           symbol,
           paused: false,
-          preset,
+          complianceAttached: false,
+          privacyAttached: false,
         };
         setTokens((prev) => [...prev, newToken]);
         return stablecoin;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── attachComplianceModule ───────────────────────────────────────────────
+  // Upgrades SSS-1 → SSS-2. blacklisterAddress will control blacklist actions.
+
+  const attachComplianceModule = useCallback(
+    async (token: SssToken, blacklisterAddress: string) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.attachComplianceModule(
+          new PublicKey(blacklisterAddress),
+          signer
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+
+        setTokens((prev) =>
+          prev.map((t) =>
+            t.mint === token.mint ? { ...t, complianceAttached: true } : t
+          )
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── detachComplianceModule ───────────────────────────────────────────────
+
+  const detachComplianceModule = useCallback(
+    async (token: SssToken) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.detachComplianceModule(signer);
+        await connection.confirmTransaction(signature, "confirmed");
+
+        setTokens((prev) =>
+          prev.map((t) =>
+            t.mint === token.mint ? { ...t, complianceAttached: false } : t
+          )
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── attachPrivacyModule ──────────────────────────────────────────────────
+
+  const attachPrivacyModule = useCallback(
+    async (
+      token: SssToken,
+      allowlistAuthority: string,
+      confidentialTransfersEnabled = false
+    ) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.attachPrivacyModule(
+          new PublicKey(allowlistAuthority),
+          confidentialTransfersEnabled,
+          signer
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+
+        setTokens((prev) =>
+          prev.map((t) =>
+            t.mint === token.mint ? { ...t, privacyAttached: true } : t
+          )
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── detachPrivacyModule ──────────────────────────────────────────────────
+
+  const detachPrivacyModule = useCallback(
+    async (token: SssToken) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.detachPrivacyModule(signer);
+        await connection.confirmTransaction(signature, "confirmed");
+
+        setTokens((prev) =>
+          prev.map((t) =>
+            t.mint === token.mint ? { ...t, privacyAttached: false } : t
+          )
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── allowlistAdd ─────────────────────────────────────────────────────────
+
+  const allowlistAdd = useCallback(
+    async (token: SssToken, address: string) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.privacy.allowlistAdd(
+          new PublicKey(address),
+          signer
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+  );
+
+  // ─── allowlistRemove ──────────────────────────────────────────────────────
+
+  const allowlistRemove = useCallback(
+    async (token: SssToken, address: string) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const signer = buildSigner();
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
+        if (!stablecoin) throw new Error("Token not found on chain");
+
+        const signature = await stablecoin.privacy.allowlistRemove(
+          new PublicKey(address),
+          signer
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
       });
     },
     [connected, wallet, publicKey, connection, withLoading, buildSigner]
@@ -305,11 +501,11 @@ export function useSolana() {
         throw new Error("Wallet not connected");
 
       return withLoading(async () => {
-        const mintPubkey = new PublicKey(token.mint);
-        const [configPubkey] = await getConfigPda(mintPubkey);
         const signer = buildSigner();
-
-        const stablecoin = await SolanaStablecoin.fetch(connection, mintPubkey);
+        const stablecoin = await SolanaStablecoin.fetch(
+          connection,
+          new PublicKey(token.mint)
+        );
         if (!stablecoin) throw new Error("Token not found on chain");
 
         const signature = await stablecoin.addMinter(
@@ -350,7 +546,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -363,6 +558,7 @@ export function useSolana() {
   );
 
   // ─── addBlacklister ───────────────────────────────────────────────────────
+  // Routes through compliance_module PDA, not directly to config.
 
   const addBlacklister = useCallback(
     async (token: SssToken, blacklisterAddress: string) => {
@@ -373,11 +569,13 @@ export function useSolana() {
         const authorityPubkey = new PublicKey(publicKey);
         const mintPubkey = new PublicKey(token.mint);
         const [configPubkey] = await getConfigPda(mintPubkey);
+        const [complianceModule] = await getCompliancePda(configPubkey);
 
         const ix = new TransactionInstruction({
           programId: PROGRAM_ID,
           keys: [
-            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: complianceModule, isWritable: true, isSigner: false },
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
           ],
           data: Buffer.concat([
@@ -389,7 +587,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -402,6 +599,7 @@ export function useSolana() {
   );
 
   // ─── blacklistAdd ─────────────────────────────────────────────────────────
+  // compliance_module PDA at index 1 (required by on-chain constraint).
 
   const blacklistAdd = useCallback(
     async (token: SssToken, address: string, reason: string) => {
@@ -413,6 +611,7 @@ export function useSolana() {
         const mintPubkey = new PublicKey(token.mint);
         const targetPubkey = new PublicKey(address);
         const [configPubkey] = await getConfigPda(mintPubkey);
+        const [complianceModule] = await getCompliancePda(configPubkey);
         const [blacklistEntry] = await getBlacklistPda(
           configPubkey,
           targetPubkey
@@ -426,7 +625,8 @@ export function useSolana() {
           programId: PROGRAM_ID,
           keys: [
             { pubkey: blacklistEntry, isWritable: true, isSigner: false },
-            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: complianceModule, isWritable: false, isSigner: false },
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: true, isSigner: true },
             { pubkey: targetPubkey, isWritable: false, isSigner: false },
             { pubkey: SYSTEM_PROGRAM, isWritable: false, isSigner: false },
@@ -441,7 +641,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -454,6 +653,8 @@ export function useSolana() {
   );
 
   // ─── blacklistRemove ──────────────────────────────────────────────────────
+  // compliance_module at index 1; authority at index 5 writable+signer
+  // (receives lamports from `close = authority` on the blacklist PDA).
 
   const blacklistRemove = useCallback(
     async (token: SssToken, address: string) => {
@@ -465,6 +666,7 @@ export function useSolana() {
         const mintPubkey = new PublicKey(token.mint);
         const targetPubkey = new PublicKey(address);
         const [configPubkey] = await getConfigPda(mintPubkey);
+        const [complianceModule] = await getCompliancePda(configPubkey);
         const [blacklistEntry] = await getBlacklistPda(
           configPubkey,
           targetPubkey
@@ -474,10 +676,11 @@ export function useSolana() {
           programId: PROGRAM_ID,
           keys: [
             { pubkey: blacklistEntry, isWritable: true, isSigner: false },
-            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: complianceModule, isWritable: false, isSigner: false },
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
             { pubkey: targetPubkey, isWritable: false, isSigner: false },
-            { pubkey: authorityPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: true, isSigner: true }, // rent recipient
           ],
           data: getInstructionDiscriminator("blacklist_remove"),
         });
@@ -485,7 +688,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -534,7 +736,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -583,7 +784,6 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -627,13 +827,12 @@ export function useSolana() {
           TOKEN_2022_PROGRAM_ID
         );
 
-        // Create ATA if it doesn't exist
         let ataExists = false;
         try {
           await getAccount(connection, ata);
           ataExists = true;
         } catch {
-          // ATA doesn't exist
+          // ATA doesn't exist yet
         }
 
         if (!ataExists) {
@@ -678,6 +877,7 @@ export function useSolana() {
   );
 
   // ─── seize ────────────────────────────────────────────────────────────────
+  // compliance_module inserted between config and mint.
 
   const seize = useCallback(
     async (
@@ -695,6 +895,8 @@ export function useSolana() {
         const configPubkey = new PublicKey(token.config);
         const fromWalletPubkey = new PublicKey(fromWallet);
         const toWalletPubkey = new PublicKey(toWallet);
+
+        const [complianceModule] = await getCompliancePda(configPubkey);
 
         const fromAta = await getAssociatedTokenAddress(
           mintPubkey,
@@ -716,7 +918,6 @@ export function useSolana() {
         const fromAtaInfo = await connection.getAccountInfo(fromAta);
         if (!fromAtaInfo)
           throw new Error("Source token account does not exist");
-
         const toAtaInfo = await connection.getAccountInfo(toAta);
 
         const amountBuffer = Buffer.alloc(8);
@@ -726,10 +927,11 @@ export function useSolana() {
           programId: PROGRAM_ID,
           keys: [
             { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: complianceModule, isWritable: false, isSigner: false },
             { pubkey: mintPubkey, isWritable: false, isSigner: false },
+            { pubkey: blacklistPDA, isWritable: false, isSigner: false },
             { pubkey: fromAta, isWritable: true, isSigner: false },
             { pubkey: toAta, isWritable: true, isSigner: false },
-            { pubkey: blacklistPDA, isWritable: false, isSigner: false },
             { pubkey: authorityPubkey, isWritable: false, isSigner: true },
             {
               pubkey: TOKEN_2022_PROGRAM_ID,
@@ -744,7 +946,6 @@ export function useSolana() {
         });
 
         const tx = new Transaction();
-
         if (!toAtaInfo) {
           tx.add(
             createAssociatedTokenAccountInstruction(
@@ -756,11 +957,108 @@ export function useSolana() {
             )
           );
         }
-
         tx.add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
 
+  // ─── pauseToken ───────────────────────────────────────────────────────────
+
+  const pauseToken = useCallback(
+    async (token: SssToken, paused: boolean) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+          ],
+          data: Buffer.concat([
+            getInstructionDiscriminator("update_paused"),
+            Buffer.from([paused ? 1 : 0]),
+          ]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        const signed = await wallet.signTransaction(tx);
+        const signature = await connection.sendRawTransaction(
+          signed.serialize()
+        );
+        await connection.confirmTransaction(signature, "confirmed");
+
+        setTokens((prev) =>
+          prev.map((t) => (t.mint === token.mint ? { ...t, paused } : t))
+        );
+        return signature;
+      });
+    },
+    [connected, wallet, publicKey, connection, withLoading]
+  );
+
+  // ─── burnTokens ───────────────────────────────────────────────────────────
+  // Discriminator is "burn_tokens" (not "burn").
+
+  const burnTokens = useCallback(
+    async (token: SssToken, fromWallet: string, amount: number) => {
+      if (!connected || !wallet || !publicKey)
+        throw new Error("Wallet not connected");
+
+      return withLoading(async () => {
+        const authorityPubkey = new PublicKey(publicKey);
+        const mintPubkey = new PublicKey(token.mint);
+        const fromPubkey = new PublicKey(fromWallet);
+        const [configPubkey] = await getConfigPda(mintPubkey);
+
+        const fromAta = await getAssociatedTokenAddress(
+          mintPubkey,
+          fromPubkey,
+          false,
+          TOKEN_2022_PROGRAM_ID
+        );
+
+        const amountBuffer = Buffer.alloc(8);
+        new DataView(amountBuffer.buffer).setBigUint64(0, BigInt(amount), true);
+
+        const ix = new TransactionInstruction({
+          programId: PROGRAM_ID,
+          keys: [
+            { pubkey: configPubkey, isWritable: false, isSigner: false },
+            { pubkey: mintPubkey, isWritable: true, isSigner: false },
+            { pubkey: fromAta, isWritable: true, isSigner: false },
+            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
+            {
+              pubkey: TOKEN_2022_PROGRAM_ID,
+              isWritable: false,
+              isSigner: false,
+            },
+          ],
+          data: Buffer.concat([
+            getInstructionDiscriminator("burn_tokens"),
+            amountBuffer,
+          ]),
+        });
+
+        const tx = new Transaction().add(ix);
+        tx.feePayer = authorityPubkey;
+        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
         const signed = await wallet.signTransaction(tx);
         const signature = await connection.sendRawTransaction(
           signed.serialize()
@@ -792,7 +1090,6 @@ export function useSolana() {
           mintPubkey,
           { limit: 20 }
         );
-
         const history: {
           amount: string;
           to: string;
@@ -815,20 +1112,21 @@ export function useSolana() {
                   "base64"
                 );
                 if (dataBuffer.length < 8) continue;
-
-                const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                if (discriminator !== "cfd480c2af364018") continue;
+                if (
+                  dataBuffer.slice(0, 8).toString("hex") !== "cfd480c2af364018"
+                )
+                  continue;
 
                 const to = new PublicKey(dataBuffer.slice(40, 72)).toString();
                 const amount = new DataView(
                   dataBuffer.buffer,
                   dataBuffer.byteOffset
                 ).getBigUint64(72, true);
-                const amountFormatted =
-                  Number(amount) / Math.pow(10, token.decimals);
 
                 history.push({
-                  amount: `+${amountFormatted.toLocaleString(undefined, {
+                  amount: `+${(
+                    Number(amount) / Math.pow(10, token.decimals)
+                  ).toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}`,
@@ -839,11 +1137,11 @@ export function useSolana() {
                   time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                 });
               } catch {
-                // skip malformed log
+                /* skip */
               }
             }
           } catch {
-            // skip failed tx
+            /* skip */
           }
         }
         return history;
@@ -866,7 +1164,6 @@ export function useSolana() {
           mintPubkey,
           { limit: 20 }
         );
-
         const accountActions: Map<
           string,
           { action: "freeze" | "thaw"; time: string; txn: string }
@@ -912,11 +1209,11 @@ export function useSolana() {
                   });
                 }
               } catch {
-                // skip malformed log
+                /* skip */
               }
             }
           } catch {
-            // skip failed tx
+            /* skip */
           }
         }
 
@@ -948,10 +1245,8 @@ export function useSolana() {
           mintPubkey,
           { limit: 20 }
         );
-
         const seizeDiscriminator =
           getInstructionDiscriminator("seize").toString("hex");
-
         const seizeActions: Map<
           string,
           {
@@ -978,9 +1273,10 @@ export function useSolana() {
                   "base64"
                 );
                 if (dataBuffer.length < 80) continue;
-
-                const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                if (discriminator !== seizeDiscriminator) continue;
+                if (
+                  dataBuffer.slice(0, 8).toString("hex") !== seizeDiscriminator
+                )
+                  continue;
 
                 const from = new PublicKey(dataBuffer.slice(8, 40)).toString();
                 const to = new PublicKey(dataBuffer.slice(40, 72)).toString();
@@ -988,13 +1284,13 @@ export function useSolana() {
                   dataBuffer.buffer,
                   dataBuffer.byteOffset
                 ).getBigUint64(72, true);
-                const amountFormatted =
-                  Number(amount) / Math.pow(10, token.decimals);
 
                 seizeActions.set(from, {
                   from,
                   to,
-                  amount: amountFormatted.toLocaleString(undefined, {
+                  amount: (
+                    Number(amount) / Math.pow(10, token.decimals)
+                  ).toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   }),
@@ -1004,11 +1300,11 @@ export function useSolana() {
                   time: sig.blockTime ? getTimeAgo(sig.blockTime) : "",
                 });
               } catch {
-                // skip malformed log
+                /* skip */
               }
             }
           } catch {
-            // skip failed tx
+            /* skip */
           }
         }
 
@@ -1039,7 +1335,6 @@ export function useSolana() {
           configPubkey,
           { limit: 20 }
         );
-
         const blacklistAddDiscriminator = "03c44e886fc5bc72";
         const accountActions: Map<
           string,
@@ -1066,9 +1361,11 @@ export function useSolana() {
                   "base64"
                 );
                 if (dataBuffer.length < 8) continue;
-
-                const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                if (discriminator !== blacklistAddDiscriminator) continue;
+                if (
+                  dataBuffer.slice(0, 8).toString("hex") !==
+                  blacklistAddDiscriminator
+                )
+                  continue;
 
                 let reason: string | undefined;
                 if (dataBuffer.length > 12) {
@@ -1103,11 +1400,11 @@ export function useSolana() {
                   }
                 }
               } catch {
-                // skip malformed log
+                /* skip */
               }
             }
           } catch {
-            // skip failed tx
+            /* skip */
           }
         }
 
@@ -1140,7 +1437,6 @@ export function useSolana() {
           configPubkey,
           { limit: 50 }
         );
-
         const blacklistAddDiscriminator = "03c44e886fc5bc72";
         const entries: Map<string, { target: string; reason?: string }> =
           new Map();
@@ -1160,9 +1456,11 @@ export function useSolana() {
                   "base64"
                 );
                 if (dataBuffer.length < 8) continue;
-
-                const discriminator = dataBuffer.slice(0, 8).toString("hex");
-                if (discriminator !== blacklistAddDiscriminator) continue;
+                if (
+                  dataBuffer.slice(0, 8).toString("hex") !==
+                  blacklistAddDiscriminator
+                )
+                  continue;
 
                 let reason: string | undefined;
                 if (dataBuffer.length > 12) {
@@ -1184,15 +1482,17 @@ export function useSolana() {
                     typeof targetAcc === "string"
                       ? targetAcc
                       : targetAcc.pubkey;
-                  const targetStr = target.toString();
-                  entries.set(targetStr, { target: targetStr, reason });
+                  entries.set(target.toString(), {
+                    target: target.toString(),
+                    reason,
+                  });
                 }
               } catch {
-                // skip
+                /* skip */
               }
             }
           } catch {
-            // skip
+            /* skip */
           }
         }
 
@@ -1223,7 +1523,7 @@ export function useSolana() {
               });
             }
           } catch {
-            // skip — account doesn't exist
+            /* skip */
           }
         }
 
@@ -1235,6 +1535,8 @@ export function useSolana() {
     },
     [connected, connection]
   );
+
+  // ─── fetchBurnHistory ─────────────────────────────────────────────────────
 
   const fetchBurnHistory = useCallback(
     async (token: SssToken) => {
@@ -1266,9 +1568,8 @@ export function useSolana() {
                 "base64"
               );
               if (dataBuffer.length < 8) continue;
-
-              const discriminator = dataBuffer.slice(0, 8).toString("hex");
-              if (discriminator !== "e6ff2271e235e309") continue; // ✅ confirmed
+              if (dataBuffer.slice(0, 8).toString("hex") !== "e6ff2271e235e309")
+                continue;
 
               const from = new PublicKey(dataBuffer.slice(40, 72)).toString();
               const amount = new DataView(
@@ -1291,7 +1592,7 @@ export function useSolana() {
               });
             }
           } catch {
-            // skip
+            /* skip */
           }
         }
         return history;
@@ -1303,133 +1604,54 @@ export function useSolana() {
     [connected, connection]
   );
 
-  const pauseToken = useCallback(
-    async (token: SssToken, paused: boolean) => {
-      if (!connected || !wallet || !publicKey)
-        throw new Error("Wallet not connected");
-      return withLoading(async () => {
-        const authorityPubkey = new PublicKey(publicKey);
-        const mintPubkey = new PublicKey(token.mint);
-        const [configPubkey] = await getConfigPda(mintPubkey);
-
-        const ix = new TransactionInstruction({
-          programId: PROGRAM_ID,
-          keys: [
-            { pubkey: configPubkey, isWritable: true, isSigner: false },
-            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
-          ],
-          data: Buffer.concat([
-            getInstructionDiscriminator("update_paused"),
-            Buffer.from([paused ? 1 : 0]),
-          ]),
-        });
-
-        const tx = new Transaction().add(ix);
-        tx.feePayer = authorityPubkey;
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
-        await connection.confirmTransaction(signature, "confirmed");
-
-        // Update local state immediately
-        setTokens((prev) =>
-          prev.map((t) => (t.mint === token.mint ? { ...t, paused } : t))
-        );
-        return signature;
-      });
-    },
-    [connected, wallet, publicKey, connection, withLoading]
-  );
-
-  const burnTokens = useCallback(
-    async (token: SssToken, fromWallet: string, amount: number) => {
-      if (!connected || !wallet || !publicKey)
-        throw new Error("Wallet not connected");
-
-      return withLoading(async () => {
-        const authorityPubkey = new PublicKey(publicKey);
-        const mintPubkey = new PublicKey(token.mint);
-        const fromPubkey = new PublicKey(fromWallet);
-        const [configPubkey] = await getConfigPda(mintPubkey);
-
-        const fromAta = await getAssociatedTokenAddress(
-          mintPubkey,
-          fromPubkey,
-          false,
-          TOKEN_2022_PROGRAM_ID
-        );
-
-        const amountBuffer = Buffer.alloc(8);
-        new DataView(amountBuffer.buffer).setBigUint64(0, BigInt(amount), true);
-
-        const ix = new TransactionInstruction({
-          programId: PROGRAM_ID,
-          keys: [
-            { pubkey: configPubkey, isWritable: false, isSigner: false },
-            { pubkey: mintPubkey, isWritable: true, isSigner: false },
-            { pubkey: fromAta, isWritable: true, isSigner: false },
-            { pubkey: authorityPubkey, isWritable: false, isSigner: true },
-            {
-              pubkey: TOKEN_2022_PROGRAM_ID,
-              isWritable: false,
-              isSigner: false,
-            },
-          ],
-          data: Buffer.concat([
-            getInstructionDiscriminator("burn"),
-            amountBuffer,
-          ]),
-        });
-
-        const tx = new Transaction().add(ix);
-        tx.feePayer = authorityPubkey;
-        tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
-        await connection.confirmTransaction(signature, "confirmed");
-        return signature;
-      });
-    },
-    [connected, wallet, publicKey, connection, withLoading]
-  );
-
   // ─── Return ───────────────────────────────────────────────────────────────
 
   return {
+    // Wallet
     connected,
     walletAddress,
     publicKey,
     connectWallet,
     disconnectWallet,
     getBalance,
+    // Token lifecycle
     createToken,
+    // Module management
+    attachComplianceModule,
+    detachComplianceModule,
+    attachPrivacyModule,
+    detachPrivacyModule,
+    allowlistAdd,
+    allowlistRemove,
+    // Role management
     addMinter,
     addFreezer,
     addBlacklister,
+    // Compliance actions
     blacklistAdd,
     blacklistRemove,
     seize,
+    // Token actions
     freeze,
     thaw,
     mint,
+    burnTokens,
+    pauseToken,
+    // State helpers
     addToken,
+    // History fetchers
     fetchMintHistory,
     fetchFreezeHistory,
     fetchSeizeHistory,
     fetchBlacklistHistory,
     fetchBlacklistEntries,
+    fetchBurnHistory,
+    // State
     isLoading,
     error,
     tokens,
     selectedToken,
     setSelectedToken,
     refreshTokens: fetchTokens,
-    fetchBurnHistory,
-    burnTokens,
-    pauseToken,
   };
 }
