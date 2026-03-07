@@ -44,7 +44,7 @@ test:
 build-program:
     cargo build-sbf --manifest-path programs/solana-stablecoin-standard/Cargo.toml
 
-# Build only the compliance hook program  
+# Build only the compliance hook program
 build-hook:
     cargo build-sbf --manifest-path programs/sss-compliance-hook/Cargo.toml
 
@@ -174,7 +174,7 @@ cli-blacklist-add address:
 
 cli-blacklist-remove address:
 	cd cli && cargo run --release -- blacklist remove {{address}}
-	
+
 cli-blacklist-check address:
 	cd cli && cargo run --release -- blacklist check {{address}}
 
@@ -195,7 +195,28 @@ cli-minters-remove address:
 # CLI holders
 cli-holders:
 	cd cli && cargo run --release -- holders
-	
+
+# CLI attach/detach compliance module
+cli-attach-compliance blacklister:
+	cd cli && cargo run --release -- attach-compliance --blacklister {{blacklister}}
+
+cli-detach-compliance:
+	cd cli && cargo run --release -- detach-compliance
+
+# CLI attach/detach privacy module
+cli-attach-privacy allowlist_authority:
+	cd cli && cargo run --release -- attach-privacy --allowlist-authority {{allowlist_authority}}
+
+cli-detach-privacy:
+	cd cli && cargo run --release -- detach-privacy
+
+# CLI allowlist
+cli-allowlist-add address:
+	cd cli && cargo run --release -- allowlist-add {{address}}
+
+cli-allowlist-remove address:
+	cd cli && cargo run --release -- allowlist-remove {{address}}
+
 # CLI TUI
 cli-tui:
 	cd cli && cargo run --release -- tui

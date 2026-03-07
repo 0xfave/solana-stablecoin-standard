@@ -1,12 +1,19 @@
 use crate::rpc_client::RpcClient;
 use crate::signer;
 use anyhow::Result;
+use solana_sdk::hash::hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
+
+fn discriminator(name: &str) -> [u8; 8] {
+    let preimage = format!("global:{}", name);
+    let h = hash(preimage.as_bytes());
+    h.to_bytes()[..8].try_into().unwrap()
+}
 
 // Correct Associated Token Program address
 const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
@@ -85,8 +92,7 @@ pub async fn execute(
         &recipient_ata,
     );
 
-    let discriminator: [u8; 8] = [0x33, 0x39, 0xe1, 0x2f, 0xb6, 0x92, 0x89, 0xa6];
-    let mut data = discriminator.to_vec();
+    let mut data = discriminator("mint_tokens").to_vec();
     data.extend_from_slice(&amount.to_le_bytes());
 
     let mint_ix = Instruction::new_with_bytes(

@@ -36,7 +36,7 @@ pub fn load_keypair_from_path(path: &PathBuf) -> Result<Keypair> {
 }
 
 pub fn get_program_id() -> String {
-    std::env::var("SSS_PROGRAM_ID").unwrap_or_else(|_| "Ak5zCGByVQ972WfccBAxR67zZambk5KqUvfEfksUMXr6".to_string())
+    std::env::var("SSS_PROGRAM_ID").unwrap_or_else(|_| "C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw".to_string())
 }
 
 pub fn get_token_2022_program_id() -> String {

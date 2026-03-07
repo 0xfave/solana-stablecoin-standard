@@ -1,12 +1,21 @@
 use crate::rpc_client::RpcClient;
 use crate::signer;
 use anyhow::Result;
+use sha2::{Sha256, Digest};
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
+use solana_sdk::hash::hash;
+
+pub fn discriminator(name: &str) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("global:{}", name));
+    let result = hasher.finalize();
+    result[..8].try_into().unwrap()
+}
 
 const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
@@ -50,9 +59,7 @@ pub async fn execute(
     let from_ata = derive_ata(&burner, &mint_pubkey, &token_2022);
     println!("Burning from ATA: {}", from_ata);
 
-    // Discriminator from IDL: burn = [116, 110, 29, 56, 107, 219, 42, 93]
-    let discriminator: [u8; 8] = [116, 110, 29, 56, 107, 219, 42, 93];
-    let mut data = discriminator.to_vec();
+    let mut data = discriminator("burn_tokens").to_vec();
     data.extend_from_slice(&amount.to_le_bytes());
 
     let ix = Instruction::new_with_bytes(

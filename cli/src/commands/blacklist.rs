@@ -1,6 +1,7 @@
 use crate::rpc_client::RpcClient;
 use crate::signer;
 use anyhow::Result;
+use base64::Engine;
 use clap::Subcommand;
 use solana_sdk::hash::hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
@@ -9,7 +10,6 @@ use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
-use base64::Engine;
 
 fn discriminator(name: &str) -> [u8; 8] {
     let preimage = format!("global:{}", name);
@@ -17,7 +17,6 @@ fn discriminator(name: &str) -> [u8; 8] {
     h.to_bytes()[..8].try_into().unwrap()
 }
 
-/// Borsh-encode a String: 4-byte LE length prefix + UTF-8 bytes
 fn borsh_string(s: &str) -> Vec<u8> {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(4 + bytes.len());
@@ -42,6 +41,10 @@ pub async fn execute(
     let (config, _) =
         Pubkey::find_program_address(&[b"stablecoin", &mint_pubkey.to_bytes()], &program_id);
 
+    // Compliance module PDA — required for all blacklist operations
+    let (compliance_module, _) =
+        Pubkey::find_program_address(&[b"compliance", &config.to_bytes()], &program_id);
+
     match action {
         BlacklistAction::Add { address, reason } => {
             let reason_str = reason.unwrap_or_else(|| "No reason provided".to_string());
@@ -50,48 +53,46 @@ pub async fn execute(
             let system_program = Pubkey::from_str(&signer::get_system_program_id())?;
             let target = Pubkey::from_str(&address)?;
 
-            // ✅ Program is program_id, not mint_pubkey
             let (blacklist, _) = Pubkey::find_program_address(
                 &[b"blacklist", &config.to_bytes(), &target.to_bytes()],
                 &program_id,
             );
 
-            println!("Config:    {}", config);
-            println!("Blacklist: {}", blacklist);
+            println!("Config:           {}", config);
+            println!("Compliance PDA:   {}", compliance_module);
+            println!("Blacklist PDA:    {}", blacklist);
 
             // Check if already blacklisted
-            let account_result = rpc.get_account(&blacklist.to_string()).await;
-            if let Ok(response) = account_result {
-                if let Some(result) = response.get("result") {
-                    if let Some(value) = result.get("value") {
-                        if !value.is_null() {
-                            println!("Address {} is already blacklisted!", address);
-                            return Ok(());
-                        }
+            if let Ok(response) = rpc.get_account(&blacklist.to_string()).await {
+                if let Some(value) = response.get("result").and_then(|r| r.get("value")) {
+                    if !value.is_null() {
+                        println!("Address {} is already blacklisted!", address);
+                        return Ok(());
                     }
                 }
             }
 
-            // ✅ Anchor discriminator + Borsh-encoded String reason
             let mut data = discriminator("blacklist_add").to_vec();
             data.extend_from_slice(&borsh_string(&reason_str));
 
+            // accounts: [blacklist_entry, compliance_module, config, blacklister, target, system_program]
             let ix = Instruction::new_with_bytes(
                 program_id,
                 &data,
                 vec![
-                    AccountMeta::new(blacklist, false),             // blacklist entry (writable, created here)
-                    AccountMeta::new(config, false),                // config (writable)
-                    AccountMeta::new(authority, true),              // blacklister (signer, writable for fees)
-                    AccountMeta::new_readonly(target, false),       // target wallet
-                    AccountMeta::new_readonly(system_program, false), // system program
+                    AccountMeta::new(blacklist, false),                // blacklist_entry (writable)
+                    AccountMeta::new_readonly(compliance_module, false), // compliance_module
+                    AccountMeta::new_readonly(config, false),           // config
+                    AccountMeta::new(authority, true),                  // blacklister (writable, signer)
+                    AccountMeta::new_readonly(target, false),           // target wallet
+                    AccountMeta::new_readonly(system_program, false),   // system_program
                 ],
             );
 
             let tx = Transaction::new_with_payer(&[ix], Some(&authority));
             let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
-            println!("Added {} to blacklist", address);
+            println!("✅ Added {} to blacklist", address);
             println!("Signature: {}", signature);
             println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
         }
@@ -101,67 +102,65 @@ pub async fn execute(
 
             let target = Pubkey::from_str(&address)?;
 
-            // ✅ Program is program_id, not mint_pubkey
             let (blacklist, _) = Pubkey::find_program_address(
                 &[b"blacklist", &config.to_bytes(), &target.to_bytes()],
                 &program_id,
             );
 
-            println!("Config:    {}", config);
-            println!("Blacklist: {}", blacklist);
+            println!("Config:           {}", config);
+            println!("Compliance PDA:   {}", compliance_module);
+            println!("Blacklist PDA:    {}", blacklist);
 
             // Check if actually blacklisted
-            let account_result = rpc.get_account(&blacklist.to_string()).await;
-            let mut is_blacklisted = false;
-            if let Ok(response) = account_result {
-                if let Some(result) = response.get("result") {
-                    if let Some(value) = result.get("value") {
-                        if !value.is_null() {
-                            is_blacklisted = true;
-                        }
-                    }
-                }
-            }
+            let is_blacklisted = rpc
+                .get_account(&blacklist.to_string())
+                .await
+                .ok()
+                .and_then(|r| r.get("result")?.get("value").cloned())
+                .map(|v| !v.is_null())
+                .unwrap_or(false);
 
             if !is_blacklisted {
                 println!("Address {} is not blacklisted!", address);
                 return Ok(());
             }
 
-            // ✅ Anchor discriminator, no extra args
             let data = discriminator("blacklist_remove").to_vec();
 
+            // accounts: [blacklist_entry, compliance_module, config, master_authority, target, authority]
             let ix = Instruction::new_with_bytes(
                 program_id,
                 &data,
                 vec![
-                    AccountMeta::new(blacklist, false),          // blacklist entry (writable, closed here)
-                    AccountMeta::new(config, false),             // config (writable)
-                    AccountMeta::new(authority, true),           // authority (signer, writable receives lamports)
-                    AccountMeta::new_readonly(target, false),    // target wallet
-                    AccountMeta::new_readonly(authority, false), // rent receiver (payer)
+                    AccountMeta::new(blacklist, false),                // blacklist_entry (writable)
+                    AccountMeta::new_readonly(compliance_module, false), // compliance_module
+                    AccountMeta::new_readonly(config, false),           // config
+                    AccountMeta::new_readonly(authority, true),         // master_authority (signer)
+                    AccountMeta::new_readonly(target, false),           // target wallet
+                    AccountMeta::new(authority, true),                  // authority (writable, rent recipient)
                 ],
             );
 
             let tx = Transaction::new_with_payer(&[ix], Some(&authority));
             let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
-            println!("Removed {} from blacklist", address);
+            println!("✅ Removed {} from blacklist", address);
             println!("Signature: {}", signature);
             println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
         }
+
         BlacklistAction::Check { address } => {
             let target = Pubkey::from_str(&address)?;
-        
+
             let (blacklist, _) = Pubkey::find_program_address(
                 &[b"blacklist", &config.to_bytes(), &target.to_bytes()],
                 &program_id,
             );
-        
+
             println!("Blacklist PDA: {}", blacklist);
-        
+
             let response = rpc.get_account(&blacklist.to_string()).await?;
-        
+
             let encoded = response
                 .get("result")
                 .and_then(|r| r.get("value"))
@@ -169,27 +168,26 @@ pub async fn execute(
                 .and_then(|d| d.as_array())
                 .and_then(|a| a.first())
                 .and_then(|v| v.as_str());
-        
+
             match encoded {
                 None => println!("Account does not exist — not blacklisted"),
                 Some(enc) => {
                     let decoded = base64::engine::general_purpose::STANDARD.decode(enc)?;
-                    println!("Account exists. Raw bytes ({}):", decoded.len());
+                    println!("✅ Address is blacklisted. Raw bytes ({}):", decoded.len());
                     println!("  discriminator: {:?}", &decoded[..8]);
-        
-                    // BlacklistEntry Borsh layout (after 8-byte discriminator):
+
+                    // BlacklistEntry layout:
+                    //   [0..8]   discriminator
                     //   [8..40]  blacklister (Pubkey)
-                    //   [40..]   reason  (String: 4-byte LE len + bytes)
+                    //   [40..]   reason (String: 4-byte LE len + bytes)
                     //   next     timestamp (i64)
-        
+                    //   next     bump (u8)
                     if decoded.len() > 44 {
-                        let reason_len = u32::from_le_bytes(
-                            decoded[40..44].try_into()?
-                        ) as usize;
-                        
-                        if reason_len > 0 && decoded.len() > 44 + reason_len {
-                            let reason_end = 44 + reason_len;
-                            let reason = String::from_utf8_lossy(&decoded[44..reason_end]);
+                        let reason_len =
+                            u32::from_le_bytes(decoded[40..44].try_into()?) as usize;
+                        if reason_len > 0 && decoded.len() >= 44 + reason_len {
+                            let reason =
+                                String::from_utf8_lossy(&decoded[44..44 + reason_len]);
                             println!("  reason: {}", reason);
                         }
                     }
@@ -213,5 +211,5 @@ pub enum BlacklistAction {
     },
     Check {
         address: String,
-    }
+    },
 }

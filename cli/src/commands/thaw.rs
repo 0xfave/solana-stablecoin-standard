@@ -1,12 +1,21 @@
 use crate::rpc_client::RpcClient;
 use crate::signer;
 use anyhow::Result;
+use sha2::{Sha256, Digest};
+use solana_sdk::hash::hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
+
+pub fn discriminator(name: &str) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("global:{}", name));
+    let result = hasher.finalize();
+    result[..8].try_into().unwrap()
+}
 
 const ASSOCIATED_TOKEN_PROGRAM: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 
@@ -51,12 +60,11 @@ pub async fn execute(
     let ata = derive_ata(&wallet_pubkey, &mint_pubkey, &token_2022);
     println!("Thawing ATA: {}", ata);
 
-    // Discriminator from IDL: thaw_account = [115, 152, 79, 213, 213, 169, 184, 35]
-    let discriminator: [u8; 8] = [115, 152, 79, 213, 213, 169, 184, 35];
+    let data = discriminator("thaw_account").to_vec();
 
     let ix = Instruction::new_with_bytes(
         program_id,
-        &discriminator,
+        &data,
         vec![
             AccountMeta::new_readonly(config, false),      // config
             AccountMeta::new_readonly(mint_pubkey, false), // mint

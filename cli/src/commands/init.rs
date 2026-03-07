@@ -9,6 +9,8 @@ use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
 
+const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
+
 fn compute_discriminator(name: &str) -> [u8; 8] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -22,19 +24,28 @@ fn compute_discriminator(name: &str) -> [u8; 8] {
 pub async fn execute(
     rpc: &RpcClient,
     keypair: &Keypair,
-    preset: Option<String>,
     name_arg: Option<String>,
     symbol_arg: Option<String>,
+    decimals_arg: Option<u8>,
     supply_cap: Option<u64>,
+    blacklister: Option<String>,
+    allowlist_authority: Option<String>,
     config: Option<String>,
 ) -> Result<()> {
-    let cfg = if let Some(config_path) = config {
+    // Load config from file if provided, otherwise use defaults
+    let mut cfg = if let Some(config_path) = config {
         StablecoinConfig::from_file(&config_path)?
-    } else if let Some(preset_name) = preset {
-        StablecoinConfig::from_preset(&preset_name)
     } else {
         StablecoinConfig::default()
     };
+
+    // CLI args override config file values
+    if let Some(cap) = supply_cap {
+        cfg.supply_cap = Some(cap);
+    }
+    if let Some(d) = decimals_arg {
+        cfg.decimals = d;
+    }
 
     let name = if let Some(n) = name_arg {
         n
@@ -56,39 +67,40 @@ pub async fn execute(
         if s.is_empty() { "STB".to_string() } else { s }
     };
 
+    let tier = match (&blacklister, &allowlist_authority) {
+        (_, Some(_)) => "SSS-3",
+        (Some(_), None) => "SSS-2",
+        _ => "SSS-1",
+    };
+
     println!("\nInitializing stablecoin:");
-    println!("  Name: {}", name);
-    println!("  Symbol: {}", symbol);
+    println!("  Name:     {}", name);
+    println!("  Symbol:   {}", symbol);
     println!("  Decimals: {}", cfg.decimals);
-    println!("  Preset: {}", cfg.preset);
+    println!("  Tier:     {}", tier);
     if let Some(cap) = cfg.supply_cap {
         println!("  Supply Cap: {}", cap);
     }
 
     let program_id = Pubkey::from_str(&signer::get_program_id())?;
-    let system_program = Pubkey::from_str(&signer::get_system_program_id())?;
+    let system_program = Pubkey::from_str(SYSTEM_PROGRAM)?;
     let token_program = Pubkey::from_str(&signer::get_token_2022_program_id())?;
 
     let mint = Keypair::new();
     let authority = keypair.pubkey();
 
-    // ✅ Derive config PDA BEFORE creating the mint
     let (config_pda, _) = Pubkey::find_program_address(
         &[b"stablecoin", &mint.pubkey().to_bytes()],
         &program_id,
     );
 
-    let preset_val = match cfg.preset.as_str() {
-        "sss-1" | "sss_1" | "1" => 0u8,
-        "sss-2" | "sss_2" | "2" => 1u8,
-        _ => 0u8,
-    };
-
-    // ✅ Include PermanentDelegate extension in space calculation
-    let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[spl_token_2022::extension::ExtensionType::PermanentDelegate]).unwrap();
+    // Space for mint with PermanentDelegate extension
+    let mint_space = spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(
+        &[spl_token_2022::extension::ExtensionType::PermanentDelegate]
+    ).unwrap();
     let lamports = rpc.get_minimum_balance_for_rent_exemption(mint_space)?;
 
-    // Instruction 1: allocate mint account with correct space
+    // Ix 1: allocate mint account
     let create_mint_ix = solana_sdk::system_instruction::create_account(
         &authority,
         &mint.pubkey(),
@@ -97,7 +109,7 @@ pub async fn execute(
         &token_program,
     );
 
-    // ✅ Instruction 2: set config PDA as permanent delegate BEFORE initialize_mint2
+    // Ix 2: set permanent delegate to config PDA (must be before initialize_mint2)
     let init_permanent_delegate_ix =
         spl_token_2022::instruction::initialize_permanent_delegate(
             &token_program,
@@ -105,7 +117,7 @@ pub async fn execute(
             &config_pda,
         )?;
 
-    // Instruction 3: initialize the mint (must come after extensions)
+    // Ix 3: initialize mint
     let initialize_mint_ix = spl_token_2022::instruction::initialize_mint2(
         &token_program,
         &mint.pubkey(),
@@ -114,10 +126,10 @@ pub async fn execute(
         cfg.decimals,
     )?;
 
-    // Instruction 4: call the program's initialize instruction
+    // Ix 4: program initialize — no preset byte in new architecture
     let disc = compute_discriminator("global:initialize");
     let mut data = disc.to_vec();
-    data.push(preset_val);
+    // supply_cap: Option<u64>
     if let Some(cap) = cfg.supply_cap {
         data.push(1);
         data.extend_from_slice(&cap.to_le_bytes());
@@ -150,22 +162,31 @@ pub async fn execute(
     let mint_address = mint.pubkey().to_string();
     let config_address = config_pda.to_string();
 
-    if let Err(e) = crate::config::CliConfig::load() {
-        eprintln!("Note: Could not save to config: {}", e);
+    // Save mint to config.toml
+    let cli_cfg = crate::config::CliConfig::load().unwrap_or_default();
+    if let Err(e) = cli_cfg.save_mint(&mint_address) {
+        eprintln!("Note: Could not save mint to config: {}", e);
     } else {
-        let cli_cfg = crate::config::CliConfig::load().unwrap_or_default();
-        if let Err(e) = cli_cfg.save_mint(&mint_address) {
-            eprintln!("Note: Could not save mint to config: {}", e);
-        } else {
-            println!("\n✅ Mint address saved to config.toml");
-        }
+        println!("\n✅ Mint address saved to config.toml");
     }
 
-    println!("\nStablecoin initialized successfully!");
-    println!("  Mint:   {}", mint_address);
-    println!("  Config: {}", config_address);
+    println!("\n✅ Stablecoin initialized ({})!", tier);
+    println!("  Mint:      {}", mint_address);
+    println!("  Config:    {}", config_address);
     println!("  Signature: {}", signature);
-    println!("  Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
+    println!("  Solscan:   https://solscan.io/tx/{}?cluster=devnet", signature);
+
+    // Optionally attach compliance module (SSS-2)
+    if let Some(ref blacklister_addr) = blacklister {
+        println!("\n🔒 Attaching compliance module (blacklister: {})...", blacklister_addr);
+        crate::commands::compliance::attach(rpc, keypair, blacklister_addr, Some(mint_address.clone())).await?;
+    }
+
+    // Optionally attach privacy module (SSS-3)
+    if let Some(ref allowlist_auth) = allowlist_authority {
+        println!("\n🔐 Attaching privacy module (allowlist authority: {})...", allowlist_auth);
+        crate::commands::privacy::attach(rpc, keypair, allowlist_auth, false, Some(mint_address.clone())).await?;
+    }
 
     Ok(())
 }

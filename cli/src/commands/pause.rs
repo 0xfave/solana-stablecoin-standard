@@ -1,12 +1,21 @@
 use crate::rpc_client::RpcClient;
 use crate::signer;
 use anyhow::Result;
+use sha2::{Sha256, Digest};
+use solana_sdk::hash::hash;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signature::Signer;
 use solana_sdk::transaction::Transaction;
 use std::str::FromStr;
+
+pub fn discriminator(name: &str) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(format!("global:{}", name));
+    let result = hasher.finalize();
+    result[..8].try_into().unwrap()
+}
 
 pub async fn execute(
     rpc: &RpcClient,
@@ -30,8 +39,7 @@ pub async fn execute(
         &program_id,
     );
 
-    let discriminator: [u8; 8] = [0x4e, 0xec, 0x55, 0x68, 0xa9, 0xe7, 0xcd, 0x59];
-    let mut data = discriminator.to_vec();
+    let mut data = discriminator("update_paused").to_vec();
     data.push(if paused { 1 } else { 0 });
 
     let ix = Instruction::new_with_bytes(

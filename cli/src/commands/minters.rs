@@ -57,45 +57,41 @@ pub async fn execute(
 
             let decoded = base64::engine::general_purpose::STANDARD.decode(encoded)?;
 
-            // StablecoinConfig Borsh layout:
+            // StablecoinConfig Borsh layout (no preset, no transfer_hook, no blacklister):
             //   [0..8]   discriminator
-            //   [8..40]  master_authority  (Pubkey)
-            //   [40..72] mint              (Pubkey)
-            //   [72]     preset            (u8)
-            //   [73]     paused            (bool)
-            //   [74]     supply_cap flag   (0=None, 1=Some)
-            //   [75..83] supply_cap value  (u64, only if flag=1)
-            //   next     transfer_hook flag (0=None, 1=Some)
-            //   +0 or 32 transfer_hook pubkey
-            //   next     decimals (u8)
-            //   next     bump     (u8)
+            //   [8..40]  master_authority       (Pubkey)
+            //   [40..72] mint                   (Pubkey)
+            //   [72]     paused                 (bool)
+            //   [73]     supply_cap flag        (0=None, 1=Some)
+            //   [74..82] supply_cap value       (u64, only if flag=1)
+            //   next     decimals               (u8)
+            //   next     bump                   (u8)
             //   next     pending_authority flag (0=None, 1=Some)
-            //   +0 or 32 pending_authority pubkey
-            //   next     minters: Vec<Pubkey>
-            //               - 4-byte little-endian length prefix
-            //               - N × 32 bytes
-            //   next     freezer      (Pubkey)
-            //   next     pauser       (Pubkey)
-            //   next     blacklister  (Pubkey)
+            //   +0|32    pending_authority      (Pubkey, only if flag=1)
+            //   next     minters: Vec<Pubkey>   (4-byte LE length + N×32)
+            //   next     freezer                (Pubkey)
+            //   next     pauser                 (Pubkey)
 
-            let mut offset = 74usize;
+            let mut offset = 73usize;
 
             // supply_cap: Option<u64>
+            if decoded.len() <= offset {
+                anyhow::bail!("Account data too short");
+            }
             let supply_cap_flag = decoded[offset]; offset += 1;
             if supply_cap_flag == 1 { offset += 8; }
-
-            // transfer_hook_program: Option<Pubkey>
-            let hook_flag = decoded[offset]; offset += 1;
-            if hook_flag == 1 { offset += 32; }
 
             // decimals + bump
             offset += 2;
 
             // pending_master_authority: Option<Pubkey>
+            if decoded.len() <= offset {
+                anyhow::bail!("Account data too short at pending_authority");
+            }
             let pending_flag = decoded[offset]; offset += 1;
             if pending_flag == 1 { offset += 32; }
 
-            // minters: Vec<Pubkey>  (4-byte length prefix, then N × 32 bytes)
+            // minters: Vec<Pubkey>
             if decoded.len() < offset + 4 {
                 anyhow::bail!("Account data too short to read minters length");
             }
@@ -116,25 +112,31 @@ pub async fn execute(
             }
 
             // freezer
+            if decoded.len() < offset + 32 {
+                anyhow::bail!("Account data too short to read freezer");
+            }
             let freezer = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
             offset += 32;
 
             // pauser
+            if decoded.len() < offset + 32 {
+                anyhow::bail!("Account data too short to read pauser");
+            }
             let pauser = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
-            offset += 32;
-
-            // blacklister
-            let blacklister = Pubkey::new_from_array(decoded[offset..offset + 32].try_into()?);
 
             println!("Stablecoin Roles:");
             println!("  Config:      {}", config);
             println!("  Minters ({}):", minter_count);
-            for m in &minters {
-                println!("    - {}", m);
+            if minters.is_empty() {
+                println!("    (none)");
+            } else {
+                for m in &minters {
+                    println!("    - {}", m);
+                }
             }
             println!("  Freezer:     {}", freezer);
             println!("  Pauser:      {}", pauser);
-            println!("  Blacklister: {}", blacklister);
+            println!("  Note: Blacklister is stored on the compliance module PDA.");
         }
 
         MinterAction::Add { address } => {
@@ -158,7 +160,7 @@ pub async fn execute(
             let tx = Transaction::new_with_payer(&[ix], Some(&authority));
             let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
-            println!("Minter added: {}", address);
+            println!("✅ Minter added: {}", address);
             println!("Signature: {}", signature);
             println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
         }
@@ -184,7 +186,7 @@ pub async fn execute(
             let tx = Transaction::new_with_payer(&[ix], Some(&authority));
             let signature = rpc.send_transaction(tx, &[keypair as &dyn Signer]).await?;
 
-            println!("Minter removed: {}", address);
+            println!("✅ Minter removed: {}", address);
             println!("Signature: {}", signature);
             println!("Solscan: https://solscan.io/tx/{}?cluster=devnet", signature);
         }
