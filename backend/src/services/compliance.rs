@@ -1,7 +1,6 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
-use std::sync::Arc;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -107,21 +106,21 @@ pub struct ComplianceService {
 impl ComplianceService {
     pub fn new(screening_api_url: Option<String>) -> Self {
         let mut rules = Vec::new();
-        
+
         rules.push(ComplianceRule {
             rule_id: "R001".to_string(),
             name: "Blocked Address Check".to_string(),
             enabled: true,
             action: ComplianceAction::Block,
         });
-        
+
         rules.push(ComplianceRule {
             rule_id: "R002".to_string(),
             name: "Large Transaction Flag".to_string(),
             enabled: true,
             action: ComplianceAction::Flag,
         });
-        
+
         rules.push(ComplianceRule {
             rule_id: "R003".to_string(),
             name: "Sanctions Check".to_string(),
@@ -140,7 +139,7 @@ impl ComplianceService {
 
     pub async fn check_address(&self, address: &str) -> ComplianceResult {
         let blacklist = self.blacklist.read().await;
-        
+
         if let Some(entry) = blacklist.get(address) {
             if entry.status == BlacklistStatus::Active {
                 return ComplianceResult {
@@ -152,17 +151,12 @@ impl ComplianceService {
             }
         }
 
-        ComplianceResult {
-            allowed: true,
-            reason: None,
-            rules_triggered: vec![],
-            risk_score: 0,
-        }
+        ComplianceResult { allowed: true, reason: None, rules_triggered: vec![], risk_score: 0 }
     }
 
     pub async fn check_transaction(&self, from: &str, to: &str, amount: u64) -> ComplianceResult {
         let mut result = self.check_address(from).await;
-        
+
         if result.allowed {
             let to_result = self.check_address(to).await;
             if !to_result.allowed {
@@ -179,7 +173,7 @@ impl ComplianceService {
             if rule.name.contains("Large Transaction") && amount > 10000 {
                 result.rules_triggered.push(rule.rule_id.clone());
                 result.risk_score += 20;
-                
+
                 if let ComplianceAction::Block = rule.action {
                     result.allowed = false;
                     result.reason = Some(format!("Large transaction flagged: {} tokens", amount));
@@ -207,8 +201,9 @@ impl ComplianceService {
             &blacklister,
             &address,
             serde_json::json!({ "reason": reason }),
-            "Success"
-        ).await;
+            "Success",
+        )
+        .await;
 
         info!("Added address to blacklist: {}", address);
         Ok(())
@@ -216,18 +211,13 @@ impl ComplianceService {
 
     pub async fn remove_from_blacklist(&self, address: &str, remover: &str) -> Result<(), String> {
         let mut blacklist = self.blacklist.write().await;
-        
+
         if let Some(entry) = blacklist.get_mut(address) {
             entry.status = BlacklistStatus::Removed;
-            
-            self.add_audit_entry(
-                AuditAction::BlacklistRemove,
-                remover,
-                address,
-                serde_json::json!({}),
-                "Success"
-            ).await;
-            
+
+            self.add_audit_entry(AuditAction::BlacklistRemove, remover, address, serde_json::json!({}), "Success")
+                .await;
+
             info!("Removed address from blacklist: {}", address);
             Ok(())
         } else {
@@ -248,7 +238,7 @@ impl ComplianceService {
 
     pub async fn update_rule(&self, rule_id: &str, enabled: bool) -> Result<(), String> {
         let mut rules = self.rules.write().await;
-        
+
         if let Some(rule) = rules.iter_mut().find(|r| r.rule_id == rule_id) {
             rule.enabled = enabled;
             info!("Updated compliance rule {}: enabled={}", rule_id, enabled);
@@ -265,8 +255,9 @@ impl ComplianceService {
 
     pub async fn export_audit_log(&self, from: Option<DateTime<Utc>>, to: Option<DateTime<Utc>>) -> Vec<AuditEntry> {
         let audit = self.audit_log.read().await;
-        
-        audit.iter()
+
+        audit
+            .iter()
             .filter(|entry| {
                 let in_range = match (from, to) {
                     (Some(f), Some(t)) => entry.timestamp >= f && entry.timestamp <= t,
@@ -330,11 +321,9 @@ mod tests {
     async fn test_add_to_blacklist() {
         let service = ComplianceService::new(None);
 
-        let result = service.add_to_blacklist(
-            "BadActor123".to_string(),
-            "Fraudulent activity".to_string(),
-            "admin".to_string(),
-        ).await;
+        let result = service
+            .add_to_blacklist("BadActor123".to_string(), "Fraudulent activity".to_string(), "admin".to_string())
+            .await;
 
         assert!(result.is_ok());
 
@@ -347,11 +336,10 @@ mod tests {
     async fn test_remove_from_blacklist() {
         let service = ComplianceService::new(None);
 
-        service.add_to_blacklist(
-            "AddressToRemove".to_string(),
-            "Reason".to_string(),
-            "admin".to_string(),
-        ).await.unwrap();
+        service
+            .add_to_blacklist("AddressToRemove".to_string(), "Reason".to_string(), "admin".to_string())
+            .await
+            .unwrap();
 
         let before = service.check_address("AddressToRemove").await;
         assert!(!before.allowed);
@@ -374,11 +362,10 @@ mod tests {
     async fn test_check_transaction_sender_blacklisted() {
         let service = ComplianceService::new(None);
 
-        service.add_to_blacklist(
-            "BlacklistedSender".to_string(),
-            "Sanctions".to_string(),
-            "admin".to_string(),
-        ).await.unwrap();
+        service
+            .add_to_blacklist("BlacklistedSender".to_string(), "Sanctions".to_string(), "admin".to_string())
+            .await
+            .unwrap();
 
         let result = service.check_transaction("BlacklistedSender", "Receiver456", 100).await;
         assert!(!result.allowed);
@@ -388,11 +375,10 @@ mod tests {
     async fn test_check_transaction_receiver_blacklisted() {
         let service = ComplianceService::new(None);
 
-        service.add_to_blacklist(
-            "BlacklistedReceiver".to_string(),
-            "Sanctions".to_string(),
-            "admin".to_string(),
-        ).await.unwrap();
+        service
+            .add_to_blacklist("BlacklistedReceiver".to_string(), "Sanctions".to_string(), "admin".to_string())
+            .await
+            .unwrap();
 
         let result = service.check_transaction("Sender123", "BlacklistedReceiver", 100).await;
         assert!(!result.allowed);

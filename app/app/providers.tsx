@@ -3,6 +3,7 @@
 import { createSolanaClient } from "gill";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode, useState, useEffect, useCallback } from "react";
+import { SssToken } from "@/lib/useSolana";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,11 +18,16 @@ interface SolanaWallet {
   isPhantom?: boolean;
   isConnected?: boolean;
   publicKey?: { toBytes: () => Uint8Array; toString: () => string };
-  connect: () => Promise<{ publicKey: { toBytes: () => Uint8Array; toString: () => string } }>;
+  connect: () => Promise<{
+    publicKey: { toBytes: () => Uint8Array; toString: () => string };
+  }>;
   disconnect: () => Promise<void>;
   onAccountChange: (callback: (account: any) => void) => void;
   request: (params: { method: string; params?: any }) => Promise<any>;
-  signMessage?: (message: Uint8Array, display?: string) => Promise<{ signature: Uint8Array }>;
+  signMessage?: (
+    message: Uint8Array,
+    display?: string
+  ) => Promise<{ signature: Uint8Array }>;
   signTransaction?: (transaction: any) => Promise<{ signature: Uint8Array }>;
 }
 
@@ -47,7 +53,7 @@ function WalletProviderInner({ children }: { children: ReactNode }) {
   useEffect(() => {
     const solWallet = getSolanaWallet();
     setWallet(solWallet || null);
-    
+
     if (solWallet?.isConnected && solWallet.publicKey) {
       setConnected(true);
       setPublicKey(solWallet.publicKey.toString());
@@ -77,7 +83,9 @@ function WalletProviderInner({ children }: { children: ReactNode }) {
   }, [wallet]);
 
   return (
-    <WalletContext.Provider value={{ connected, publicKey, connectWallet, disconnectWallet, wallet }}>
+    <WalletContext.Provider
+      value={{ connected, publicKey, connectWallet, disconnectWallet, wallet }}
+    >
       <TokenContext.Provider value={{ selectedToken, setSelectedToken }}>
         {children}
       </TokenContext.Provider>
@@ -108,18 +116,6 @@ export const WalletContext = React.createContext<WalletContextValue>({
   disconnectWallet: async () => {},
   wallet: null,
 });
-
-interface SssToken {
-  mint: string;
-  config: string;
-  authority: string;
-  supply: string;
-  decimals: number;
-  name?: string;
-  symbol?: string;
-  paused: boolean;
-  preset: number;
-}
 
 interface TokenContextValue {
   selectedToken: SssToken | null;

@@ -46,6 +46,7 @@ export interface SssToken {
   privacyAttached: boolean;
   minters?: string[];
   freezer?: string;
+  blacklister?: string;
 }
 
 // ─── PDA Derivation Helpers ───────────────────────────────────────────────────
@@ -143,6 +144,15 @@ export function useSolana() {
     []
   );
 
+  const signAndSend = useCallback(
+    async (tx: Transaction): Promise<string> => {
+      if (!wallet?.signTransaction)
+        throw new Error("Wallet does not support signTransaction");
+      const signed = (await wallet.signTransaction(tx)) as Transaction;
+      return connection.sendRawTransaction(signed.serialize());
+    },
+    [wallet, connection]
+  );
   const buildSigner = useCallback(() => {
     if (!wallet || !publicKey) throw new Error("Wallet not connected");
     return {
@@ -204,7 +214,7 @@ export function useSolana() {
               if (!sss) continue;
 
               const isMasterAuthority =
-                sss.masterAuthority?.equals(walletPubkey);
+                sss.authorityAddress.equals(walletPubkey);
               const isMinter = sss.minters.some((m) => m.equals(walletPubkey));
               const isFreezer = sss.freezer?.equals(walletPubkey);
 
@@ -214,7 +224,7 @@ export function useSolana() {
               sssTokens.push({
                 mint: mintPubkey.toString(),
                 config: configPubkey.toString(),
-                authority: sss.masterAuthority?.toString() ?? "",
+                authority: sss.authorityAddress.toString(),
                 supply: rawSupply,
                 decimals: sss.decimals,
                 paused: sss.paused,
@@ -542,15 +552,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── addBlacklister ───────────────────────────────────────────────────────
@@ -583,15 +590,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── blacklistAdd ─────────────────────────────────────────────────────────
@@ -637,15 +641,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── blacklistRemove ──────────────────────────────────────────────────────
@@ -684,15 +685,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── freeze ───────────────────────────────────────────────────────────────
@@ -732,15 +730,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── thaw ─────────────────────────────────────────────────────────────────
@@ -780,15 +775,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── mint ─────────────────────────────────────────────────────────────────
@@ -844,11 +836,7 @@ export function useSolana() {
           ataTx.recentBlockhash = (
             await connection.getLatestBlockhash()
           ).blockhash;
-          const signedAta = await wallet.signTransaction(ataTx);
-          const ataSig = await connection.sendRawTransaction(
-            signedAta.serialize(),
-            { skipPreflight: true }
-          );
+          const ataSig = await signAndSend(ataTx);
           await connection.confirmTransaction(ataSig, "confirmed");
         }
 
@@ -869,7 +857,15 @@ export function useSolana() {
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading, buildSigner]
+    [
+      connected,
+      wallet,
+      publicKey,
+      connection,
+      withLoading,
+      buildSigner,
+      signAndSend,
+    ]
   );
 
   // ─── seize ────────────────────────────────────────────────────────────────
@@ -956,15 +952,12 @@ export function useSolana() {
         tx.add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── pauseToken ───────────────────────────────────────────────────────────
@@ -994,10 +987,7 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
 
         setTokens((prev) =>
@@ -1006,7 +996,7 @@ export function useSolana() {
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── burnTokens ───────────────────────────────────────────────────────────
@@ -1055,15 +1045,12 @@ export function useSolana() {
         const tx = new Transaction().add(ix);
         tx.feePayer = authorityPubkey;
         tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-        const signed = await wallet.signTransaction(tx);
-        const signature = await connection.sendRawTransaction(
-          signed.serialize()
-        );
+        const signature = await signAndSend(tx);
         await connection.confirmTransaction(signature, "confirmed");
         return signature;
       });
     },
-    [connected, wallet, publicKey, connection, withLoading]
+    [connected, wallet, publicKey, connection, withLoading, signAndSend]
   );
 
   // ─── addToken (local state helper) ───────────────────────────────────────
@@ -1380,7 +1367,7 @@ export function useSolana() {
                   const address =
                     typeof targetAcc === "string"
                       ? targetAcc
-                      : targetAcc.pubkey;
+                      : (targetAcc as { pubkey: string }).pubkey;
                   if (address) {
                     accountActions.set(address.toString(), {
                       action: "add",

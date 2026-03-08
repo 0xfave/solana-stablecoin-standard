@@ -1,11 +1,8 @@
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tokio::time::sleep;
-use tracing::{info, warn, error};
 use reqwest::Client;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::{sync::mpsc, time::sleep};
+use tracing::{error, info, warn};
 
 use super::events::OnChainEvent;
 
@@ -20,13 +17,7 @@ pub struct WebhookConfig {
 
 impl Default for WebhookConfig {
     fn default() -> Self {
-        Self {
-            url: String::new(),
-            secret: None,
-            retry_count: 3,
-            retry_delay_ms: 1000,
-            enabled: false,
-        }
+        Self { url: String::new(), secret: None, retry_count: 3, retry_delay_ms: 1000, enabled: false }
     }
 }
 
@@ -53,26 +44,15 @@ pub struct WebhookService {
 
 impl WebhookService {
     pub fn new(config: WebhookConfig) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
+        let client = Client::builder().timeout(Duration::from_secs(30)).build().expect("Failed to create HTTP client");
 
-        Self {
-            client,
-            config,
-            webhook_id: uuid::Uuid::new_v4().to_string(),
-        }
+        Self { client, config, webhook_id: uuid::Uuid::new_v4().to_string() }
     }
 
     pub async fn send_event(&self, event: OnChainEvent) -> Result<WebhookResponse, String> {
         if !self.config.enabled {
             info!("Webhook disabled, skipping event: {:?}", event.event_type);
-            return Ok(WebhookResponse {
-                success: true,
-                message: "Webhook disabled".to_string(),
-                status_code: 0,
-            });
+            return Ok(WebhookResponse { success: true, message: "Webhook disabled".to_string(), status_code: 0 });
         }
 
         let payload = WebhookPayload {
@@ -90,21 +70,15 @@ impl WebhookService {
 
         for attempt in 1..=self.config.retry_count {
             payload.attempt = attempt;
-            
+
             match self.send_request(&payload).await {
                 Ok(response) => {
                     if response.success {
-                        info!(
-                            "Webhook delivered successfully on attempt {}: {}",
-                            attempt, self.config.url
-                        );
+                        info!("Webhook delivered successfully on attempt {}: {}", attempt, self.config.url);
                         return Ok(response);
                     }
                     last_error = response.message;
-                    warn!(
-                        "Webhook attempt {} failed: {}",
-                        attempt, last_error
-                    );
+                    warn!("Webhook attempt {} failed: {}", attempt, last_error);
                 }
                 Err(e) => {
                     last_error = e.to_string();
@@ -114,23 +88,14 @@ impl WebhookService {
 
             if attempt < self.config.retry_count {
                 let delay = Duration::from_millis(self.config.retry_delay_ms * attempt as u64);
-                warn!(
-                    "Retrying webhook in {:?} (attempt {}/{})",
-                    delay, attempt + 1, self.config.retry_count
-                );
+                warn!("Retrying webhook in {:?} (attempt {}/{})", delay, attempt + 1, self.config.retry_count);
                 sleep(delay).await;
             }
         }
 
-        error!(
-            "Webhook failed after {} attempts: {}",
-            self.config.retry_count, last_error
-        );
+        error!("Webhook failed after {} attempts: {}", self.config.retry_count, last_error);
 
-        Err(format!(
-            "Webhook failed after {} attempts: {}",
-            self.config.retry_count, last_error
-        ))
+        Err(format!("Webhook failed after {} attempts: {}", self.config.retry_count, last_error))
     }
 
     async fn send_request(&self, payload: &WebhookPayload) -> Result<WebhookResponse, String> {
@@ -144,22 +109,14 @@ impl WebhookService {
         request = request.header("Content-Type", "application/json");
         request = request.header("X-Webhook-ID", &self.webhook_id);
 
-        let response = request
-            .json(payload)
-            .send()
-            .await
-            .map_err(|e| format!("Request failed: {}", e))?;
+        let response = request.json(payload).send().await.map_err(|e| format!("Request failed: {}", e))?;
 
         let status = response.status();
         let success = status.is_success();
 
         Ok(WebhookResponse {
             success,
-            message: if success {
-                "OK".to_string()
-            } else {
-                format!("HTTP {}", status)
-            },
+            message: if success { "OK".to_string() } else { format!("HTTP {}", status) },
             status_code: status.as_u16(),
         })
     }
@@ -182,10 +139,7 @@ pub struct WebhookManager {
 
 impl WebhookManager {
     pub fn new(event_receiver: mpsc::Receiver<OnChainEvent>) -> Self {
-        Self {
-            webhooks: HashMap::new(),
-            event_receiver,
-        }
+        Self { webhooks: HashMap::new(), event_receiver }
     }
 
     pub fn register_webhook(&mut self, name: String, config: WebhookConfig) {
@@ -203,7 +157,7 @@ impl WebhookManager {
             let service = service.clone();
             let event = event.clone();
             let name = name.clone();
-            
+
             tokio::spawn(async move {
                 let service = service.lock().await;
                 if let Err(e) = service.send_event(event).await {
@@ -216,13 +170,13 @@ impl WebhookManager {
 
     pub async fn start(mut self) {
         info!("Starting webhook manager with {} webhooks", self.webhooks.len());
-        
+
         while let Some(event) = self.event_receiver.recv().await {
             for (name, service) in self.webhooks.iter() {
                 let service = service.clone();
                 let event = event.clone();
                 let name = name.clone();
-                
+
                 tokio::spawn(async move {
                     let service = service.lock().await;
                     if let Err(e) = service.send_event(event).await {

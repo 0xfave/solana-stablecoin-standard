@@ -227,3 +227,19 @@ alias fs := full-stack
 
 # Dev stack: build programs + run backend in dev mode
 dev: build-all backend-run
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend-install:
+	cd app && npm install
+
+frontend-dev:
+	cd app && npm run dev
+
+frontend-build:
+	cd app && npm run build
+
+frontend-start:
+	cd app && npm start
+
+frontend-lint:
+	cd app && npm run lint

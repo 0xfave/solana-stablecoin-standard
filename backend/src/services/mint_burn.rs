@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use solana_sdk::pubkey::Pubkey;
 
-use super::events::{MintEvent, BurnEvent, OnChainEvent, EventType, EventChannel};
+use super::events::{BurnEvent, EventChannel, EventType, MintEvent, OnChainEvent};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MintStatus {
@@ -128,10 +128,10 @@ impl MintBurnService {
         };
 
         info!("Mint request created: {} for {} tokens", request.id, amount);
-        
+
         let mut mints = self.pending_mints.write().await;
         mints.push(request.clone());
-        
+
         Ok(request)
     }
 
@@ -162,10 +162,10 @@ impl MintBurnService {
         };
 
         info!("Burn request created: {} for {} tokens", request.id, amount);
-        
+
         let mut burns = self.pending_burns.write().await;
         burns.push(request.clone());
-        
+
         Ok(request)
     }
 
@@ -206,8 +206,9 @@ impl MintBurnService {
         signature: Option<String>,
     ) -> Result<MintRequest, String> {
         let mut mints = self.pending_mints.write().await;
-        
-        let request = mints.iter_mut()
+
+        let request = mints
+            .iter_mut()
             .find(|m| m.id == request_id)
             .ok_or_else(|| format!("Mint request {} not found", request_id))?;
 
@@ -215,11 +216,11 @@ impl MintBurnService {
         if let Some(sig) = signature {
             request.signature = Some(sig.clone());
         }
-        
+
         if matches!(status, MintStatus::Confirmed) {
             request.confirmed_at = Some(Utc::now());
             info!("Mint confirmed for request {}", request_id);
-            
+
             if let Some(sender) = &self.event_sender {
                 let event = OnChainEvent {
                     event_type: EventType::TokensMinted,
@@ -231,14 +232,15 @@ impl MintBurnService {
                         to: request.user_wallet.clone(),
                         amount: request.amount,
                         minter: self.config.minter.to_string(),
-                    }).unwrap(),
+                    })
+                    .unwrap(),
                 };
                 let _ = sender.send(event).await;
             }
         }
 
         let result = request.clone();
-        
+
         Ok(result)
     }
 
@@ -249,8 +251,9 @@ impl MintBurnService {
         signature: Option<String>,
     ) -> Result<BurnRequest, String> {
         let mut burns = self.pending_burns.write().await;
-        
-        let request = burns.iter_mut()
+
+        let request = burns
+            .iter_mut()
             .find(|b| b.id == request_id)
             .ok_or_else(|| format!("Burn request {} not found", request_id))?;
 
@@ -260,11 +263,11 @@ impl MintBurnService {
         }
 
         let result = request.clone();
-        
+
         if matches!(status, BurnStatus::Confirmed) {
             request.confirmed_at = Some(Utc::now());
             info!("Burn confirmed for request {}", request_id);
-            
+
             if let Some(sender) = &self.event_sender {
                 let event = OnChainEvent {
                     event_type: EventType::TokensBurned,
@@ -276,7 +279,8 @@ impl MintBurnService {
                         from: request.user_wallet.clone(),
                         amount: request.amount,
                         burner: self.config.minter.to_string(),
-                    }).unwrap(),
+                    })
+                    .unwrap(),
                 };
                 let _ = sender.send(event).await;
             }
@@ -287,36 +291,39 @@ impl MintBurnService {
 
     pub async fn fail_mint(&self, request_id: &str, error: String) -> Result<MintRequest, String> {
         let mut mints = self.pending_mints.write().await;
-        
-        let request = mints.iter_mut()
+
+        let request = mints
+            .iter_mut()
             .find(|m| m.id == request_id)
             .ok_or_else(|| format!("Mint request {} not found", request_id))?;
 
         request.status = MintStatus::Failed;
         request.error = Some(error.clone());
-        
+
         warn!("Mint failed for request {}: {}", request_id, error);
         Ok(request.clone())
     }
 
     pub async fn fail_burn(&self, request_id: &str, error: String) -> Result<BurnRequest, String> {
         let mut burns = self.pending_burns.write().await;
-        
-        let request = burns.iter_mut()
+
+        let request = burns
+            .iter_mut()
             .find(|b| b.id == request_id)
             .ok_or_else(|| format!("Burn request {} not found", request_id))?;
 
         request.status = BurnStatus::Failed;
         request.error = Some(error.clone());
-        
+
         warn!("Burn failed for request {}: {}", request_id, error);
         Ok(request.clone())
     }
 
     pub async fn cancel_mint(&self, request_id: &str) -> Result<MintRequest, String> {
         let mut mints = self.pending_mints.write().await;
-        
-        let request = mints.iter_mut()
+
+        let request = mints
+            .iter_mut()
             .find(|m| m.id == request_id)
             .ok_or_else(|| format!("Mint request {} not found", request_id))?;
 
@@ -331,8 +338,9 @@ impl MintBurnService {
 
     pub async fn cancel_burn(&self, request_id: &str) -> Result<BurnRequest, String> {
         let mut burns = self.pending_burns.write().await;
-        
-        let request = burns.iter_mut()
+
+        let request = burns
+            .iter_mut()
             .find(|b| b.id == request_id)
             .ok_or_else(|| format!("Burn request {} not found", request_id))?;
 
@@ -370,12 +378,14 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let result = service.create_mint_request(
-            "UserWallet123".to_string(),
-            1000,
-            "fiat_tx_123".to_string(),
-            "custodian_1".to_string(),
-        ).await;
+        let result = service
+            .create_mint_request(
+                "UserWallet123".to_string(),
+                1000,
+                "fiat_tx_123".to_string(),
+                "custodian_1".to_string(),
+            )
+            .await;
 
         assert!(result.is_ok());
         let request = result.unwrap();
@@ -389,12 +399,9 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let result = service.create_mint_request(
-            "UserWallet123".to_string(),
-            0,
-            "fiat_tx_123".to_string(),
-            "custodian_1".to_string(),
-        ).await;
+        let result = service
+            .create_mint_request("UserWallet123".to_string(), 0, "fiat_tx_123".to_string(), "custodian_1".to_string())
+            .await;
 
         assert!(result.is_err());
     }
@@ -404,12 +411,15 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet123".to_string(),
-            1000,
-            "fiat_tx_123".to_string(),
-            "custodian_1".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request(
+                "UserWallet123".to_string(),
+                1000,
+                "fiat_tx_123".to_string(),
+                "custodian_1".to_string(),
+            )
+            .await
+            .unwrap();
 
         let fetched = service.get_mint_request(&created.id).await;
         assert!(fetched.is_some());
@@ -421,26 +431,20 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        service.create_mint_request(
-            "Wallet1".to_string(),
-            100,
-            "tx1".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        service
+            .create_mint_request("Wallet1".to_string(), 100, "tx1".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
-        service.create_mint_request(
-            "Wallet1".to_string(),
-            200,
-            "tx2".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        service
+            .create_mint_request("Wallet1".to_string(), 200, "tx2".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
-        service.create_mint_request(
-            "Wallet2".to_string(),
-            300,
-            "tx3".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        service
+            .create_mint_request("Wallet2".to_string(), 300, "tx3".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
         let wallet1_mints = service.get_mints_by_wallet("Wallet1").await;
         assert_eq!(wallet1_mints.len(), 2);
@@ -454,18 +458,13 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet".to_string(),
-            1000,
-            "fiat_tx".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request("UserWallet".to_string(), 1000, "fiat_tx".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
-        let updated = service.update_mint_status(
-            &created.id,
-            MintStatus::Confirmed,
-            Some("sig123".to_string()),
-        ).await.unwrap();
+        let updated =
+            service.update_mint_status(&created.id, MintStatus::Confirmed, Some("sig123".to_string())).await.unwrap();
 
         assert_eq!(updated.status, MintStatus::Confirmed);
         assert_eq!(updated.signature.unwrap(), "sig123");
@@ -477,12 +476,10 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet".to_string(),
-            1000,
-            "fiat_tx".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request("UserWallet".to_string(), 1000, "fiat_tx".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
         let failed = service.fail_mint(&created.id, "Insufficient funds".to_string()).await.unwrap();
 
@@ -495,12 +492,10 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet".to_string(),
-            1000,
-            "fiat_tx".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request("UserWallet".to_string(), 1000, "fiat_tx".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
         let cancelled = service.cancel_mint(&created.id).await.unwrap();
         assert_eq!(cancelled.status, MintStatus::Cancelled);
@@ -511,12 +506,10 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet".to_string(),
-            1000,
-            "fiat_tx".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request("UserWallet".to_string(), 1000, "fiat_tx".to_string(), "custodian".to_string())
+            .await
+            .unwrap();
 
         service.update_mint_status(&created.id, MintStatus::Processing, None).await.unwrap();
 
@@ -529,13 +522,15 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let result = service.create_burn_request(
-            "UserWallet123".to_string(),
-            "TokenAccount456".to_string(),
-            500,
-            "bank_account".to_string(),
-            "custodian_1".to_string(),
-        ).await;
+        let result = service
+            .create_burn_request(
+                "UserWallet123".to_string(),
+                "TokenAccount456".to_string(),
+                500,
+                "bank_account".to_string(),
+                "custodian_1".to_string(),
+            )
+            .await;
 
         assert!(result.is_ok());
         let request = result.unwrap();
@@ -548,12 +543,15 @@ mod tests {
         let config = MintBurnConfig::default();
         let service = MintBurnService::new(config);
 
-        let created = service.create_mint_request(
-            "UserWallet".to_string(),
-            1000,
-            "unique_fiat_tx_123".to_string(),
-            "custodian".to_string(),
-        ).await.unwrap();
+        let created = service
+            .create_mint_request(
+                "UserWallet".to_string(),
+                1000,
+                "unique_fiat_tx_123".to_string(),
+                "custodian".to_string(),
+            )
+            .await
+            .unwrap();
 
         let found = service.get_mints_by_fiat_tx("unique_fiat_tx_123").await;
         assert!(found.is_some());

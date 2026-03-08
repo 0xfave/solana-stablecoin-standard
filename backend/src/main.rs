@@ -14,13 +14,14 @@ mod services;
 #[cfg(test)]
 mod integration_tests;
 
-use routes::health::health;
-use routes::webhook::webhook;
-use services::compliance::{AuditEntry, BlacklistEntry, ComplianceService};
-use services::events::{EventIndexer, EventListener, ListenerConfig, OnChainEvent};
-use services::mint_burn::{BurnRequest, MintBurnConfig, MintBurnService, MintRequest};
-use services::rpc::RpcClient;
-use services::webhook::{WebhookConfig, WebhookService};
+use routes::{health::health, webhook::webhook};
+use services::{
+    compliance::{AuditEntry, BlacklistEntry, ComplianceService},
+    events::{EventIndexer, EventListener, ListenerConfig, OnChainEvent},
+    mint_burn::{BurnRequest, MintBurnConfig, MintBurnService, MintRequest},
+    rpc::RpcClient,
+    webhook::{WebhookConfig, WebhookService},
+};
 
 // ─── Tier ────────────────────────────────────────────────────────────────────
 
@@ -145,10 +146,7 @@ async fn create_mint_request(
     }
 }
 
-async fn get_mint_request(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Json<ApiResponse<MintRequest>> {
+async fn get_mint_request(State(state): State<AppState>, Path(id): Path<String>) -> Json<ApiResponse<MintRequest>> {
     match state.mint_burn.read().await.get_mint_request(&id).await {
         Some(r) => ApiResponse::ok(r),
         None => ApiResponse::err("Mint request not found"),
@@ -188,10 +186,7 @@ async fn create_burn_request(
     }
 }
 
-async fn get_burn_request(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> Json<ApiResponse<BurnRequest>> {
+async fn get_burn_request(State(state): State<AppState>, Path(id): Path<String>) -> Json<ApiResponse<BurnRequest>> {
     match state.mint_burn.read().await.get_burn_request(&id).await {
         Some(r) => ApiResponse::ok(r),
         None => ApiResponse::err("Burn request not found"),
@@ -303,10 +298,15 @@ async fn export_audit(
     State(state): State<AppState>,
     Query(q): Query<AuditExportQuery>,
 ) -> Json<ApiResponse<Vec<AuditEntry>>> {
-    let from = q.from.as_deref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+    let from = q
+        .from
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
-    let to = q.to.as_deref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc));
+    let to =
+        q.to.as_deref()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
     ApiResponse::ok(state.compliance.export_audit_log(from, to).await)
 }
 
@@ -338,15 +338,17 @@ async fn event_processor(
         drop(idx);
 
         // Record all on-chain events to the compliance audit trail
-        compliance.record_transaction(services::compliance::TransactionMonitor {
-            transaction_id: event.signature.clone(),
-            from: String::new(),
-            to: String::new(),
-            amount: 0,
-            timestamp: event.timestamp,
-            status: services::compliance::TransactionStatus::Completed,
-            compliance_result: None,
-        }).await;
+        compliance
+            .record_transaction(services::compliance::TransactionMonitor {
+                transaction_id: event.signature.clone(),
+                from: String::new(),
+                to: String::new(),
+                amount: 0,
+                timestamp: event.timestamp,
+                status: services::compliance::TransactionStatus::Completed,
+                compliance_result: None,
+            })
+            .await;
 
         let wh = webhooks.read().await;
         if wh.is_enabled() {
@@ -397,41 +399,37 @@ fn build_router(state: AppState) -> Router {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
 
-    let rpc_url = std::env::var("RPC_URL")
-        .unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
-    let ws_url = std::env::var("WS_URL")
-        .unwrap_or_else(|_| "wss://api.devnet.solana.com".to_string());
+    let rpc_url = std::env::var("RPC_URL").unwrap_or_else(|_| "https://api.devnet.solana.com".to_string());
+    let ws_url = std::env::var("WS_URL").unwrap_or_else(|_| "wss://api.devnet.solana.com".to_string());
     let program_id: Pubkey = std::env::var("PROGRAM_ID")
         .unwrap_or_else(|_| "C78Fk7ZeyGuQV92u3aKJQSeXMn35A9Jrjeyv33UNE4Nw".to_string())
-        .parse().expect("Invalid PROGRAM_ID");
-    let mint: Pubkey = std::env::var("MINT_ADDRESS")
-        .expect("MINT_ADDRESS is required")
-        .parse().expect("Invalid MINT_ADDRESS");
-    let minter: Pubkey = std::env::var("MINTER_ADDRESS")
-        .unwrap_or_else(|_| mint.to_string())
-        .parse().expect("Invalid MINTER_ADDRESS");
-    let decimals: u8 = std::env::var("DECIMALS").unwrap_or_else(|_| "6".to_string())
-        .parse().unwrap_or(6);
+        .parse()
+        .expect("Invalid PROGRAM_ID");
+    let mint: Pubkey =
+        std::env::var("MINT_ADDRESS").expect("MINT_ADDRESS is required").parse().expect("Invalid MINT_ADDRESS");
+    let minter: Pubkey =
+        std::env::var("MINTER_ADDRESS").unwrap_or_else(|_| mint.to_string()).parse().expect("Invalid MINTER_ADDRESS");
+    let decimals: u8 = std::env::var("DECIMALS").unwrap_or_else(|_| "6".to_string()).parse().unwrap_or(6);
     let max_supply: u64 = std::env::var("MAX_SUPPLY")
         .unwrap_or_else(|_| "1000000000000000".to_string())
-        .parse().unwrap_or(1_000_000_000_000_000);
-    let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string())
-        .parse().unwrap_or(3000);
+        .parse()
+        .unwrap_or(1_000_000_000_000_000);
+    let port: u16 = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string()).parse().unwrap_or(3000);
     let tier = Tier::from_env();
 
     info!("Starting SSS Backend — tier: {:?}, program: {}, mint: {}", tier, program_id, mint);
 
     let rpc = Arc::new(RpcClient::new(rpc_url.clone()));
     let mint_burn = Arc::new(RwLock::new(MintBurnService::new(MintBurnConfig {
-        mint, minter, decimals, max_supply, confirmation_timeout_secs: 30,
+        mint,
+        minter,
+        decimals,
+        max_supply,
+        confirmation_timeout_secs: 30,
     })));
-    let compliance = Arc::new(ComplianceService::new(
-        std::env::var("SANCTIONS_API_URL").ok(),
-    ));
+    let compliance = Arc::new(ComplianceService::new(std::env::var("SANCTIONS_API_URL").ok()));
     let indexer = Arc::new(RwLock::new(EventIndexer::new()));
     let (event_tx, event_rx) = mpsc::channel::<OnChainEvent>(1000);
 
@@ -455,15 +453,8 @@ async fn main() {
         enabled: std::env::var("WEBHOOK_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true",
     })));
 
-    let state = AppState {
-        rpc,
-        program_id,
-        mint,
-        tier,
-        mint_burn,
-        compliance: compliance.clone(),
-        indexer: indexer.clone(),
-    };
+    let state =
+        AppState { rpc, program_id, mint, tier, mint_burn, compliance: compliance.clone(), indexer: indexer.clone() };
 
     let app = build_router(state);
 

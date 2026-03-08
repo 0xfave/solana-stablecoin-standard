@@ -1,12 +1,11 @@
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use tokio::sync::mpsc::Sender;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
-use futures_util::{StreamExt, SinkExt};
-use tracing::{info, warn, error, debug};
+use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::{mpsc::Sender, RwLock};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::{debug, error, info, warn};
 
 use super::rpc::RpcClient;
 
@@ -119,18 +118,13 @@ pub struct EventListener {
 
 impl EventListener {
     pub fn new(config: ListenerConfig, event_sender: EventChannel, rpc: Arc<RpcClient>) -> Self {
-        Self {
-            config,
-            event_sender,
-            rpc,
-            seen_signatures: Arc::new(RwLock::new(std::collections::HashSet::new())),
-        }
+        Self { config, event_sender, rpc, seen_signatures: Arc::new(RwLock::new(std::collections::HashSet::new())) }
     }
 
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             info!("Starting event listener for program: {}", self.config.program_id);
-            
+
             let ws_url = self.build_ws_url();
             println!("DEBUG: Connecting to websocket: {}", ws_url);
             info!("Connecting to websocket: {}", ws_url);
@@ -144,7 +138,7 @@ impl EventListener {
                         error!("Failed to send subscription: {}", e);
                         continue;
                     }
-                    
+
                     info!("Subscribed to program events");
 
                     while let Some(msg) = read.next().await {
@@ -203,7 +197,7 @@ impl EventListener {
 
     async fn handle_message(&self, text: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let json: serde_json::Value = serde_json::from_str(text)?;
-        
+
         if let Some(params) = json.get("params") {
             if let Some(result) = params.get("result") {
                 if let Some(value) = result.get("value") {
@@ -219,12 +213,12 @@ impl EventListener {
 
     async fn process_signature(&self, signature: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut seen = self.seen_signatures.write().await;
-        
+
         if seen.contains(signature) {
             return Ok(());
         }
         seen.insert(signature.to_string());
-        
+
         if seen.len() > self.config.filter_depth as usize {
             let to_remove: Vec<_> = seen.iter().take(self.config.filter_depth as usize / 2).cloned().collect();
             for s in to_remove {
@@ -236,13 +230,16 @@ impl EventListener {
         debug!("Processing signature: {}", signature);
 
         let signature_str = signature.to_string();
-        
-        let tx_value: serde_json::Value = self.rpc.get_transaction_json(&signature_str, &self.config.commitment).await
+
+        let tx_value: serde_json::Value = self
+            .rpc
+            .get_transaction_json(&signature_str, &self.config.commitment)
+            .await
             .map_err(|e| format!("Failed to get transaction: {}", e))?;
 
         if let Some(log_messages) = tx_value.get("meta").and_then(|m| m.get("logMessages")).and_then(|l| l.as_array()) {
             let slot = tx_value.get("slot").and_then(|s| s.as_u64()).unwrap_or(0);
-            
+
             for log in log_messages {
                 if let Some(log_str) = log.as_str() {
                     if let Some(event) = self.parse_log(log_str, &signature_str, slot) {
@@ -268,7 +265,7 @@ impl EventListener {
                 data: serde_json::json!({}),
             });
         }
-        
+
         if log.contains("TokensMinted") {
             return Some(OnChainEvent {
                 event_type: EventType::TokensMinted,
@@ -370,9 +367,7 @@ pub struct EventIndexer {
 
 impl EventIndexer {
     pub fn new() -> Self {
-        Self {
-            events: Vec::new(),
-        }
+        Self { events: Vec::new() }
     }
 
     pub fn add_event(&mut self, event: OnChainEvent) -> IndexedEvent {

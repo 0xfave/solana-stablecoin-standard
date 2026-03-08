@@ -1,8 +1,10 @@
+use crate::{
+    services::mint_burn::{BurnStatus, MintStatus},
+    AppState,
+};
 use axum::{extract::State, http::HeaderMap, Json};
 use serde_json::Value;
 use tracing::{info, warn};
-use crate::AppState;
-use crate::services::mint_burn::{MintStatus, BurnStatus};
 
 pub async fn webhook(
     State(state): State<AppState>,
@@ -28,10 +30,7 @@ pub async fn webhook(
             "MINT" => {
                 // fiat_tx_id is used as the correlation key between the off-chain
                 // mint request and the on-chain confirmation from Helius.
-                let fiat_tx_id = event["description"]
-                    .as_str()
-                    .or_else(|| event["fiatTxId"].as_str())
-                    .unwrap_or("");
+                let fiat_tx_id = event["description"].as_str().or_else(|| event["fiatTxId"].as_str()).unwrap_or("");
 
                 let service = state.mint_burn.read().await;
 
@@ -42,10 +41,7 @@ pub async fn webhook(
                         .update_mint_status(&request.id, MintStatus::Confirmed, Some(signature.to_string()))
                         .await
                     {
-                        Ok(updated) => info!(
-                            "Webhook confirmed mint request {} via sig={}",
-                            updated.id, signature
-                        ),
+                        Ok(updated) => info!("Webhook confirmed mint request {} via sig={}", updated.id, signature),
                         Err(e) => warn!("Webhook failed to confirm mint {}: {}", request.id, e),
                     }
                 } else {
@@ -56,10 +52,7 @@ pub async fn webhook(
             }
             "BURN" => {
                 // Correlate via the token account in the burn event.
-                let token_account = event["tokenAccount"]
-                    .as_str()
-                    .or_else(|| event["source"].as_str())
-                    .unwrap_or("");
+                let token_account = event["tokenAccount"].as_str().or_else(|| event["source"].as_str()).unwrap_or("");
 
                 let service = state.mint_burn.read().await;
                 let pending = service.get_pending_burns().await;
@@ -72,14 +65,14 @@ pub async fn webhook(
                         .update_burn_status(&request.id, BurnStatus::Confirmed, Some(signature.to_string()))
                         .await
                     {
-                        Ok(updated) => info!(
-                            "Webhook confirmed burn request {} via sig={}",
-                            updated.id, signature
-                        ),
+                        Ok(updated) => info!("Webhook confirmed burn request {} via sig={}", updated.id, signature),
                         Err(e) => warn!("Webhook failed to confirm burn {}: {}", request.id, e),
                     }
                 } else {
-                    info!("Webhook BURN sig={} has no matching pending burn (token_account='{}')", signature, token_account);
+                    info!(
+                        "Webhook BURN sig={} has no matching pending burn (token_account='{}')",
+                        signature, token_account
+                    );
                 }
             }
             "TRANSFER" => {
