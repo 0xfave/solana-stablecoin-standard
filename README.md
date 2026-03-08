@@ -1,4 +1,7 @@
 # Solana Stablecoin Standard (SSS)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Solana](https://img.shields.io/badge/Solana-Token2022-purple)](https://solana.com)
+[![Anchor](https://img.shields.io/badge/Anchor-0.30.1-blue)](https://www.anchor-lang.com/)  
 
 A production-grade, modular stablecoin system built on Solana using Anchor and Token-2022. Supports three compliance tiers with an on-chain program, a CLI/TUI tool, and a Rust backend API.
 
