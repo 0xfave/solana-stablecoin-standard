@@ -6698,8 +6698,10 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "anyhow",
  "axum",
  "base64 0.22.1",
+ "bincode",
  "bs58",
  "chrono",
  "dotenvy",
