@@ -29,13 +29,13 @@ pub mod sss_compliance_hook {
 
     pub fn transfer_hook(ctx: Context<TransferHook>, amount: u64) -> Result<()> {
         let config = &ctx.accounts.config;
-
         require!(!config.paused, ComplianceError::TransfersPaused);
 
-        let source_owner = ctx.accounts.source_owner.key();
-        let destination_owner = ctx.accounts.destination_owner.key();
+        // Use token account owner (actual wallet) not the signer
+        // — signer could be a delegate, bypassing blacklist
+        let source_owner = ctx.accounts.source_token_account.owner;
+        let destination_owner = ctx.accounts.destination_token_account.owner;
         let config_key = config.key();
-
         let blacklist_seed = b"blacklist";
         let program_id = crate::ID;
 
@@ -67,8 +67,7 @@ pub mod sss_compliance_hook {
             }
         }
 
-        msg!("Transfer hook passed for {} tokens from {} to {}", amount, source_owner, destination_owner);
-
+        msg!("Transfer hook passed for {} tokens", amount);
         Ok(())
     }
 
@@ -108,27 +107,25 @@ pub struct InitializeExtraAccountMetaList<'info> {
 
 #[derive(Accounts, Clone)]
 pub struct TransferHook<'info> {
-    #[account(token::mint = mint, token::authority = source_owner)]
+    #[account(token::mint = mint)]
     pub source_token_account: InterfaceAccount<'info, TokenAccount>,
     pub mint: InterfaceAccount<'info, Mint>,
-    #[account(token::mint = mint, token::authority = destination_owner)]
+    #[account(token::mint = mint)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
-    pub source_owner: Signer<'info>,
-    pub destination_owner: Signer<'info>,
     #[account(
         seeds = [b"stablecoin", mint.key().as_ref()],
         bump = config.bump
     )]
     pub config: Account<'info, StablecoinConfig>,
-    /// CHECK: This is a PDA derived from blacklist seeds - account existence is checked at runtime
+    /// CHECK: PDA derived from token account owner — existence = blacklisted
     #[account(
-        seeds = [b"blacklist", config.key().as_ref(), source_owner.key().as_ref()],
+        seeds = [b"blacklist", config.key().as_ref(), source_token_account.owner.as_ref()],
         bump
     )]
     pub source_blacklist_check: UncheckedAccount<'info>,
-    /// CHECK: This is a PDA derived from blacklist seeds - account existence is checked at runtime
+    /// CHECK: PDA derived from token account owner — existence = blacklisted
     #[account(
-        seeds = [b"blacklist", config.key().as_ref(), destination_owner.key().as_ref()],
+        seeds = [b"blacklist", config.key().as_ref(), destination_token_account.owner.as_ref()],
         bump
     )]
     pub destination_blacklist_check: UncheckedAccount<'info>,
