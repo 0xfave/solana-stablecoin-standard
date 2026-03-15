@@ -109,11 +109,6 @@ pub mod sss_compliance_hook {
     }
 
     pub fn fallback(_program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Result<()> {
-        // First thing in fallback:
-        msg!("fallback data len: {}", data.len());
-        if data.len() >= 8 {
-            msg!("fallback discriminator: {:?}", &data[..8]);
-        }
         const EXECUTE_DISCRIMINATOR: [u8; 8] = [105, 37, 101, 197, 75, 251, 102, 26];
 
         if data.len() < 16 {
@@ -176,11 +171,6 @@ pub mod sss_compliance_hook {
             return Err(ComplianceError::ReceiverBlacklisted.into());
         }
 
-        msg!("fallback: mint={}", mint.key);
-        msg!("fallback: config_key={}", config_key);
-        msg!("fallback: source_owner={}", source_owner);
-        msg!("fallback: source_blacklist_key={}", source_blacklist_key);
-        msg!("fallback: accounts count={}", accounts.len());
         for (i, a) in accounts.iter().enumerate() {
             msg!("fallback: accounts[{}]={} data_len={}", i, a.key, a.data_len());
         }
