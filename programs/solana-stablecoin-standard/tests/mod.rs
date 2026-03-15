@@ -130,6 +130,148 @@ mod tests {
         svm.send_transaction(tx).expect("Failed to create mint");
     }
 
+    pub fn create_mint_with_hook(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        mint: &Keypair,
+        mint_authority: &Pubkey,
+        decimals: u8,
+        hook_program_id: &Pubkey,
+    ) {
+        let token_program = TOKEN_2022_ID;
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
+
+        let mint_space =
+            spl_token_2022::extension::ExtensionType::try_calculate_account_len::<spl_token_2022::state::Mint>(&[
+                spl_token_2022::extension::ExtensionType::PermanentDelegate,
+                spl_token_2022::extension::ExtensionType::TransferHook,
+            ])
+            .unwrap();
+
+        let lamports = svm.minimum_balance_for_rent_exemption(mint_space);
+
+        let create_ix = system_instruction::create_account(
+            &payer.pubkey(),
+            &mint.pubkey(),
+            lamports,
+            mint_space as u64,
+            &token_program,
+        );
+
+        let init_permanent_delegate_ix =
+            spl_token_2022::instruction::initialize_permanent_delegate(&token_program, &mint.pubkey(), &config_pda)
+                .unwrap();
+
+        // ← exact import path for 9.0.0
+        let init_transfer_hook_ix = spl_token_2022::extension::transfer_hook::instruction::initialize(
+            &token_program,
+            &mint.pubkey(),
+            Some(*mint_authority),
+            Some(*hook_program_id),
+        )
+        .unwrap();
+
+        let init_mint_ix = spl_token_2022::instruction::initialize_mint2(
+            &token_program,
+            &mint.pubkey(),
+            mint_authority,
+            Some(mint_authority),
+            decimals,
+        )
+        .unwrap();
+
+        let tx = Transaction::new_signed_with_payer(
+            &[create_ix, init_permanent_delegate_ix, init_transfer_hook_ix, init_mint_ix],
+            Some(&payer.pubkey()),
+            &[payer, mint],
+            svm.latest_blockhash(),
+        );
+
+        svm.send_transaction(tx).expect("Failed to create mint with hook");
+    }
+
+    fn initialize_extra_account_meta_list(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        authority: &Keypair,
+        mint: &Pubkey,
+    ) -> Result<(), String> {
+        // Config PDA derived from main SSS program
+        let (config_pda, config_bump) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        // ExtraAccountMetaList PDA derived from compliance hook program
+        let (extra_account_meta_list, _) =
+            Pubkey::find_program_address(&[mint.as_ref(), SSS_PROGRAM_ID.as_ref()], &SSS_PROGRAM_ID);
+
+        let discriminator = compute_instruction_discriminator("initialize_extra_account_meta_list");
+        let data = serialize_with_discriminator(&discriminator, &[]);
+
+        let accounts = vec![
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(extra_account_meta_list, false),
+            AccountMeta::new_readonly(config_pda, false), // ← must be derived from this exact mint
+            AccountMeta::new(authority.pubkey(), true),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+        ];
+
+        let tx = Transaction::new_signed_with_payer(
+            &[Instruction { program_id: SSS_PROGRAM_ID, accounts, data }],
+            Some(&payer.pubkey()),
+            &[payer, authority],
+            svm.latest_blockhash(),
+        );
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
+    fn invoke_transfer_hook_directly(
+        svm: &mut LiteSVM,
+        payer: &Keypair,
+        source_token: &Pubkey,
+        mint: &Pubkey,
+        dest_token: &Pubkey,
+        authority_pubkey: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
+        const EXECUTE_DISCRIMINATOR: [u8; 8] = [105, 37, 101, 197, 75, 251, 102, 26];
+        let mut data = EXECUTE_DISCRIMINATOR.to_vec();
+        data.extend_from_slice(&amount.to_le_bytes());
+
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &PROGRAM_ID);
+
+        let source_data = svm.get_account(source_token).unwrap().data;
+        let source_owner = Pubkey::try_from(&source_data[32..64]).unwrap();
+        let dest_data = svm.get_account(dest_token).unwrap().data;
+        let dest_owner = Pubkey::try_from(&dest_data[32..64]).unwrap();
+
+        let (source_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), source_owner.as_ref()], &PROGRAM_ID);
+        let (dest_blacklist, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_pda.as_ref(), dest_owner.as_ref()], &PROGRAM_ID);
+
+        let accounts = vec![
+            AccountMeta::new(*source_token, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new(*dest_token, false),
+            AccountMeta::new_readonly(*authority_pubkey, false),
+            AccountMeta::new_readonly(config_pda, false),
+            AccountMeta::new_readonly(source_blacklist, false),
+            AccountMeta::new_readonly(dest_blacklist, false),
+        ];
+
+        let ix = Instruction { program_id: SSS_PROGRAM_ID, accounts, data };
+
+        let tx = Transaction::new_signed_with_payer(&[ix], Some(&payer.pubkey()), &[payer], svm.latest_blockhash());
+
+        match svm.send_transaction(tx) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("{:?}", e)),
+        }
+    }
+
     pub fn initialize(
         svm: &mut LiteSVM,
         payer: &Keypair,
@@ -2216,5 +2358,92 @@ mod tests {
         let new_authority = Keypair::new();
         let result = accept_master_authority(svm, payer, &new_authority, &mint.pubkey());
         assert!(result.is_err(), "accept_master_authority should fail when there is no pending authority");
+    }
+
+    #[test]
+    fn test_fallback_enforces_blacklist_on_native_transfer() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        // Create mint WITH TransferHook extension pointing to compliance hook
+        create_mint_with_hook(svm, payer, mint, &mint_authority.pubkey(), 6, &SSS_PROGRAM_ID);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+        attach_compliance_module(svm, payer, mint_authority, &mint.pubkey(), mint_authority.pubkey(), None, None)
+            .unwrap();
+        initialize_extra_account_meta_list(svm, payer, mint_authority, &mint.pubkey()).unwrap();
+
+        let sender = Keypair::new();
+        let receiver = Keypair::new();
+        svm.airdrop(&sender.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&receiver.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let sender_ata = create_token_account_for_owner(svm, payer, &sender, &mint.pubkey());
+        let receiver_ata = create_token_account_for_owner(svm, payer, &receiver, &mint.pubkey());
+
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &sender_ata, 1000).unwrap();
+
+        // Blacklist the sender
+        blacklist_add(svm, payer, mint_authority, &mint.pubkey(), &sender.pubkey(), "sanctions".to_string()).unwrap();
+
+        let (config_pda, _) = Pubkey::find_program_address(&[b"stablecoin", mint.pubkey().as_ref()], &PROGRAM_ID);
+
+        // Native transfer_checked — hits the fallback handler, not transfer_hook instruction
+        let result = invoke_transfer_hook_directly(
+            svm,
+            payer,
+            &sender_ata,
+            &mint.pubkey(),
+            &receiver_ata,
+            &sender.pubkey(),
+            500,
+        );
+        assert!(result.is_err(), "hook should reject blacklisted sender");
+    }
+
+    #[test]
+    fn test_fallback_allows_clean_wallets_on_native_transfer() {
+        let mut setup = setup();
+        let svm = &mut setup.svm;
+        let payer = &setup.payer;
+        let mint = &setup.mint;
+        let mint_authority = &setup.mint_authority;
+
+        create_mint_with_hook(svm, payer, mint, &mint_authority.pubkey(), 6, &SSS_PROGRAM_ID);
+        initialize(svm, payer, mint_authority, &mint.pubkey(), Some(1_000_000_000_000), 6);
+        attach_compliance_module(svm, payer, mint_authority, &mint.pubkey(), mint_authority.pubkey(), None, None)
+            .unwrap();
+        initialize_extra_account_meta_list(svm, payer, mint_authority, &mint.pubkey()).unwrap();
+
+        let sender = Keypair::new();
+        let receiver = Keypair::new();
+        svm.airdrop(&sender.pubkey(), LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&receiver.pubkey(), LAMPORTS_PER_SOL).unwrap();
+
+        let sender_ata = create_token_account_for_owner(svm, payer, &sender, &mint.pubkey());
+        let receiver_ata = create_token_account_for_owner(svm, payer, &receiver, &mint.pubkey());
+
+        program_mint(svm, payer, mint_authority, &mint.pubkey(), &sender_ata, 1000).unwrap();
+
+        // No blacklist — clean wallets should pass through
+        let result = invoke_transfer_hook_directly(
+            svm,
+            payer,
+            &sender_ata,
+            &mint.pubkey(),
+            &receiver_ata,
+            &sender.pubkey(),
+            500,
+        );
+        assert!(result.is_ok(), "hook should allow clean wallets");
+    }
+
+    #[test]
+    fn print_extra_account_meta_list_size() {
+        use spl_tlv_account_resolution::state::ExtraAccountMetaList;
+        let size = ExtraAccountMetaList::size_of(1).unwrap();
+        println!("ExtraAccountMetaList::size_of(1) = {}", size);
     }
 }

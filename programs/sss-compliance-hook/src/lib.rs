@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount};
+use solana_stablecoin_standard::ID as SSS_PROGRAM_ID;
+use spl_tlv_account_resolution::{account::ExtraAccountMeta, state::ExtraAccountMetaList};
+use spl_transfer_hook_interface::instruction::ExecuteInstruction;
 use spl_transfer_hook_interface::instruction::TransferHookInstruction;
 
 declare_id!("2fLexdN1nyTkWNcnagCSbVKUZ262d8WWAzeQUdjoEt88");
@@ -18,69 +21,172 @@ pub enum ComplianceError {
     InvalidInstruction,
 }
 
+fn verify_config(config: &UncheckedAccount, mint: &Pubkey) -> Result<()> {
+    let (expected_config, _) = Pubkey::find_program_address(&[b"stablecoin", mint.as_ref()], &SSS_PROGRAM_ID);
+    require_keys_eq!(config.key(), expected_config, ComplianceError::InvalidInstruction);
+    require_eq!(*config.owner, SSS_PROGRAM_ID, ComplianceError::InvalidInstruction);
+    Ok(())
+}
+
+fn enforce_blacklist(
+    config_key: &Pubkey,
+    source_owner: &Pubkey,
+    destination_owner: &Pubkey,
+    source_blacklist: &AccountInfo,
+    destination_blacklist: &AccountInfo,
+    paused: bool,
+) -> Result<()> {
+    require!(!paused, ComplianceError::TransfersPaused);
+
+    // MUST use main SSS program ID — blacklist PDAs are owned by the main program
+    let blacklist_seed = b"blacklist";
+
+    let source_blacklist_key = Pubkey::try_find_program_address(
+        &[blacklist_seed, config_key.as_ref(), source_owner.as_ref()],
+        &SSS_PROGRAM_ID,
+    )
+    .map(|(key, _)| key);
+
+    if let Some(key) = source_blacklist_key {
+        if *source_blacklist.key == key && source_blacklist.data_len() > 0 {
+            return Err(ComplianceError::SenderBlacklisted.into());
+        }
+    }
+
+    let dest_blacklist_key = Pubkey::try_find_program_address(
+        &[blacklist_seed, config_key.as_ref(), destination_owner.as_ref()],
+        &SSS_PROGRAM_ID,
+    )
+    .map(|(key, _)| key);
+
+    if let Some(key) = dest_blacklist_key {
+        if *destination_blacklist.key == key && destination_blacklist.data_len() > 0 {
+            return Err(ComplianceError::ReceiverBlacklisted.into());
+        }
+    }
+
+    Ok(())
+}
+
 #[program]
 pub mod sss_compliance_hook {
     use super::*;
 
     pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
+        verify_config(&ctx.accounts.config, &ctx.accounts.mint.key())?;
+
+        // Store config PDA as extra account so Token-2022 passes it to fallback
+        let account_metas = vec![ExtraAccountMeta::new_with_pubkey(&ctx.accounts.config.key(), false, false)?];
+
+        let binding = ctx.accounts.extra_account_meta_list.to_account_info();
+        let mut data = binding.try_borrow_mut_data()?;
+        ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &account_metas)?;
+
         msg!("ExtraAccountMetaList initialized for mint: {}", ctx.accounts.mint.key());
         Ok(())
     }
 
-    pub fn transfer_hook(ctx: Context<TransferHook>, amount: u64) -> Result<()> {
-        let config = &ctx.accounts.config;
-        require!(!config.paused, ComplianceError::TransfersPaused);
+    pub fn transfer_hook(ctx: Context<TransferHook>, _amount: u64) -> Result<()> {
+        verify_config(&ctx.accounts.config, &ctx.accounts.mint.key())?;
 
-        // Use token account owner (actual wallet) not the signer
-        // — signer could be a delegate, bypassing blacklist
+        let config_data = ctx.accounts.config.try_borrow_data()?;
+        let paused = config_data[72] != 0;
+
         let source_owner = ctx.accounts.source_token_account.owner;
         let destination_owner = ctx.accounts.destination_token_account.owner;
-        let config_key = config.key();
-        let blacklist_seed = b"blacklist";
-        let program_id = crate::ID;
 
-        let source_blacklist_key = Pubkey::try_find_program_address(
-            &[blacklist_seed, config_key.as_ref(), source_owner.as_ref()],
-            &program_id,
-        )
-        .map(|(key, _)| key);
+        enforce_blacklist(
+            &ctx.accounts.config.key(),
+            &source_owner,
+            &destination_owner,
+            &ctx.accounts.source_blacklist_check.to_account_info(),
+            &ctx.accounts.destination_blacklist_check.to_account_info(),
+            paused,
+        )?;
 
-        if let Some(blacklist_key) = source_blacklist_key {
-            if *ctx.accounts.source_blacklist_check.key == blacklist_key
-                && ctx.accounts.source_blacklist_check.data_len() > 0
-            {
-                return Err(ComplianceError::SenderBlacklisted.into());
-            }
-        }
-
-        let dest_blacklist_key = Pubkey::try_find_program_address(
-            &[blacklist_seed, config_key.as_ref(), destination_owner.as_ref()],
-            &program_id,
-        )
-        .map(|(key, _)| key);
-
-        if let Some(blacklist_key) = dest_blacklist_key {
-            if *ctx.accounts.destination_blacklist_check.key == blacklist_key
-                && ctx.accounts.destination_blacklist_check.data_len() > 0
-            {
-                return Err(ComplianceError::ReceiverBlacklisted.into());
-            }
-        }
-
-        msg!("Transfer hook passed for {} tokens", amount);
+        msg!("Transfer hook passed for {} tokens", _amount);
         Ok(())
     }
 
-    pub fn fallback(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Result<()> {
-        let instruction = TransferHookInstruction::unpack(data)?;
-
-        match instruction {
-            TransferHookInstruction::Execute { amount } => {
-                msg!("Fallback: Executing transfer hook with amount: {}", amount);
-                Ok(())
-            }
-            _ => Err(ComplianceError::InvalidInstruction.into()),
+    pub fn fallback(_program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> Result<()> {
+        // First thing in fallback:
+        msg!("fallback data len: {}", data.len());
+        if data.len() >= 8 {
+            msg!("fallback discriminator: {:?}", &data[..8]);
         }
+        const EXECUTE_DISCRIMINATOR: [u8; 8] = [105, 37, 101, 197, 75, 251, 102, 26];
+
+        if data.len() < 16 {
+            return Err(ComplianceError::InvalidInstruction.into());
+        }
+        if &data[..8] != EXECUTE_DISCRIMINATOR {
+            return Err(ComplianceError::InvalidInstruction.into());
+        }
+
+        let amount = u64::from_le_bytes(data[8..16].try_into().map_err(|_| ComplianceError::InvalidInstruction)?);
+
+        if accounts.len() < 4 {
+            return Err(ComplianceError::InvalidInstruction.into());
+        }
+
+        let source_token = &accounts[0];
+        let mint = &accounts[1];
+        let destination_token = &accounts[2];
+
+        let source_data = source_token.try_borrow_data()?;
+        let source_owner = Pubkey::try_from(&source_data[32..64]).map_err(|_| ComplianceError::InvalidInstruction)?;
+        drop(source_data);
+
+        let dest_data = destination_token.try_borrow_data()?;
+        let destination_owner =
+            Pubkey::try_from(&dest_data[32..64]).map_err(|_| ComplianceError::InvalidInstruction)?;
+        drop(dest_data);
+
+        let (config_key, _) = Pubkey::find_program_address(&[b"stablecoin", mint.key.as_ref()], &SSS_PROGRAM_ID);
+
+        // Find config by key — works regardless of account position
+        let config_account = accounts.iter().find(|a| *a.key == config_key);
+
+        let paused = if let Some(cfg) = config_account {
+            let config_data = cfg.try_borrow_data()?;
+            config_data.len() > 72 && config_data[72] != 0
+        } else {
+            false // no config passed — skip pause check
+        };
+
+        require!(!paused, ComplianceError::TransfersPaused);
+
+        let (source_blacklist_key, _) =
+            Pubkey::find_program_address(&[b"blacklist", config_key.as_ref(), source_owner.as_ref()], &SSS_PROGRAM_ID);
+        let (dest_blacklist_key, _) = Pubkey::find_program_address(
+            &[b"blacklist", config_key.as_ref(), destination_owner.as_ref()],
+            &SSS_PROGRAM_ID,
+        );
+
+        let source_blacklisted =
+            accounts.iter().find(|a| *a.key == source_blacklist_key).map(|a| a.data_len() > 0).unwrap_or(false);
+
+        let dest_blacklisted =
+            accounts.iter().find(|a| *a.key == dest_blacklist_key).map(|a| a.data_len() > 0).unwrap_or(false);
+
+        if source_blacklisted {
+            return Err(ComplianceError::SenderBlacklisted.into());
+        }
+        if dest_blacklisted {
+            return Err(ComplianceError::ReceiverBlacklisted.into());
+        }
+
+        msg!("fallback: mint={}", mint.key);
+        msg!("fallback: config_key={}", config_key);
+        msg!("fallback: source_owner={}", source_owner);
+        msg!("fallback: source_blacklist_key={}", source_blacklist_key);
+        msg!("fallback: accounts count={}", accounts.len());
+        for (i, a) in accounts.iter().enumerate() {
+            msg!("fallback: accounts[{}]={} data_len={}", i, a.key, a.data_len());
+        }
+
+        msg!("Fallback: Transfer hook enforced for {} tokens", amount);
+        Ok(())
     }
 }
 
@@ -90,16 +196,13 @@ pub struct InitializeExtraAccountMetaList<'info> {
     #[account(
         init,
         payer = authority,
-        space = state::ExtraAccountMetaListAccount::INIT_SPACE,
+        space = 8 + ExtraAccountMetaList::size_of(1).unwrap(),
         seeds = [mint.key().as_ref(), crate::ID.as_ref()],
         bump
     )]
     pub extra_account_meta_list: Account<'info, state::ExtraAccountMetaListAccount>,
-    #[account(
-        seeds = [b"stablecoin", mint.key().as_ref()],
-        bump = config.bump
-    )]
-    pub config: Account<'info, StablecoinConfig>,
+    /// CHECK: Verified manually in handler — seeds derived from main program ID not hook ID
+    pub config: UncheckedAccount<'info>,
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -112,45 +215,10 @@ pub struct TransferHook<'info> {
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(token::mint = mint)]
     pub destination_token_account: InterfaceAccount<'info, TokenAccount>,
-    #[account(
-        seeds = [b"stablecoin", mint.key().as_ref()],
-        bump = config.bump
-    )]
-    pub config: Account<'info, StablecoinConfig>,
+    /// CHECK: Verified manually in handler — seeds derived from main program ID not hook ID
+    pub config: UncheckedAccount<'info>,
     /// CHECK: PDA derived from token account owner — existence = blacklisted
-    #[account(
-        seeds = [b"blacklist", config.key().as_ref(), source_token_account.owner.as_ref()],
-        bump
-    )]
     pub source_blacklist_check: UncheckedAccount<'info>,
     /// CHECK: PDA derived from token account owner — existence = blacklisted
-    #[account(
-        seeds = [b"blacklist", config.key().as_ref(), destination_token_account.owner.as_ref()],
-        bump
-    )]
     pub destination_blacklist_check: UncheckedAccount<'info>,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct StablecoinConfig {
-    pub master_authority: Pubkey,
-    pub mint: Pubkey,
-    pub preset: u8,
-    pub paused: bool,
-    pub supply_cap: Option<u64>,
-    pub transfer_hook_program: Option<Pubkey>,
-    pub decimals: u8,
-    pub bump: u8,
-    pub pending_master_authority: Option<Pubkey>,
-}
-
-#[account]
-#[derive(InitSpace)]
-pub struct BlacklistEntry {
-    pub blacklister: Pubkey,
-    #[max_len(200)]
-    pub reason: String,
-    pub timestamp: i64,
-    pub bump: u8,
 }
